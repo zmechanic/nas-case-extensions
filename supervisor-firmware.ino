@@ -247,11 +247,14 @@ static RgbLedUserMode _rgb_led_colors_user_mode = RGB_LED_USER_MODE_NONE;
 static uint8_t _lcd_brightness_pwm = 255;
 static uint8_t _lcd_brightness_current = 0;
 static uint8_t _lcd_brightness_target = 255;
+static uint8_t _lcd_fade_speed_increment = 5;
 static unsigned long _last_lcd_fade_update_time = 0;
 
 static uint8_t _display_page_current = 1;
 static unsigned long _display_alert_end_time = 0;
 static unsigned long _display_info_end_time = 0;
+static bool _is_showing_alert = false;
+static bool _is_showing_info = false;
 
 static uint8_t _disk_temperature_alert = 0;
 static uint8_t _disk_shutdown_delay_in_seconds = 0;
@@ -319,7 +322,7 @@ void setup() {
   // Beep on power up
   tone(BUZZER_PIN, 800, 200);
 
-  // Check 12V power supply to HDD on reset, and if it's already ON then skip the power button check
+  // TODO: Check 12v/5v power supply to HDD on reset, and if it's already ON then skip the power button check
   // and also set `_disk_power_state` to reflect current state
   for (uint8_t i = 0; i < 100; i++) {
     if (_disk_power_state) {
@@ -335,7 +338,7 @@ void setup() {
   exit_sleep_mode();
 
   // Synchronously fade in LCD brightness
-  for (uint8_t i = 0; i < 30; i++) {
+  for (uint8_t i = 0; i < (_lcd_brightness_target / _lcd_fade_speed_increment) + 1; i++) {
     fade_lcd_update();
     delay(10);
     wdt_reset();
@@ -367,14 +370,16 @@ void setup() {
 void loop() {
   wdt_reset();
 
-  const unsigned long elapsed_time = millis();
-
   const bool is_usb_suspended = USBDevice.isSuspended();
   const bool is_usb_connected = USBDevice.configured();
   const bool toggle_usb_suspended = !_was_usb_suspended && is_usb_suspended;
   const bool toggle_usb_unsuspended = _was_usb_suspended && !is_usb_suspended;
   const bool toggle_usb_connected = !_was_usb_connected && is_usb_connected;
   const bool toggle_usb_disconnected = _was_usb_connected && !is_usb_connected;
+
+  const unsigned long elapsed_time = millis();
+  _is_showing_alert = elapsed_time < _display_alert_end_time;
+  _is_showing_info = elapsed_time < _display_info_end_time;
 
   if (_wait_status)
   {
@@ -392,6 +397,7 @@ void loop() {
     } else if (_wait_status == WAIT_STATUS_SLEEP_PHASE1) {
       if (_disk_shutdown_delay_end_time) {
         if (elapsed_time > _disk_shutdown_delay_end_time) {
+          hdd_power_off();
           change_wait_status(WAIT_STATUS_SLEEP_PHASE2);
         }
       } else {
@@ -449,15 +455,10 @@ void loop() {
 
   process_status_changes();
 
-  const bool is_showing_alert = elapsed_time < _display_alert_end_time;
-  const bool is_showing_info = elapsed_time < _display_info_end_time;
+  if (_is_showing_alert != _was_showing_alert) {
+    _was_showing_alert = _is_showing_alert;
 
-  if (is_showing_alert != _was_showing_alert) {
-    _was_showing_alert = is_showing_alert;
-
-    if (!is_showing_alert) {
-      rgb_led_restore_color();
-    }
+    rgb_led_restore_color();
   }
 
   rgb_led_update();
@@ -467,18 +468,13 @@ void loop() {
     return;
   }
 
-  // Don't run any other code in sleep
-  if (_wait_status == WAIT_STATUS_SLEEP) {
-    return;
-  }
-
   // *** LESS PRIORITY CODE STARTS HERE ***
   const unsigned long elapsed_time_since_1o4_second_check = elapsed_time - _last_check_time_1o4_second;
   if (elapsed_time_since_1o4_second_check >= 250) {
     _last_check_time_1o4_second = elapsed_time - (elapsed_time_since_1o4_second_check - 250);
     _last_check_time_1o4_second_counter++;
 
-    update_fans_rpm();
+    fans_rpm_update();
 
     //int adcValue = analogRead(ADC_PIN);
     //Serial.println(fan_rpm);
@@ -487,9 +483,9 @@ void loop() {
   // *** LOW PRIORITY CODE STARTS HERE ***
   // Every 1 second updates
   if (_last_check_time_1o4_second_counter % 4) {
-    apply_fan_pwm();
+    fan_pwm_apply_updated_values();
 
-    if (!is_showing_alert && !is_showing_info) {
+    if (!_is_showing_alert && !_is_showing_info) {
       if (_wait_status) {
         if (elapsed_time > _display_button_screen_page_hold_end_time) {
           display_wait_screen();
@@ -499,9 +495,12 @@ void loop() {
       }
     }
 
-    if (_is_network_connected != SENSOR_NOT_PRESENT) {
-      rgb_led_restore_color();
-    }
+    rgb_led_restore_color();
+  }
+
+  // Don't run any other code in sleep
+  if (_wait_status == WAIT_STATUS_SLEEP) {
+    return;
   }
 
   // Every 2 seconds updates
@@ -811,7 +810,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
       fans[fan_index].use_hysteresys_curve = false;
     }
 
-    apply_fan_pwm();
+    fan_pwm_apply_updated_values();
 
     return chars_count;
   }
@@ -841,7 +840,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
       }
     }
 
-    apply_fan_pwm();
+    fan_pwm_apply_updated_values();
 
     return chars_count;
   }
@@ -849,7 +848,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
   if (cmd == CMD_FAN_CARRIER_FREQUENCY_SET) {
     const uint16_t *tokens = token_chunks[0].tokens;
     _fan_carrier_freq = tokens[0];
-    apply_fan_pwm();
+    fan_pwm_apply_updated_values();
     return chars_count;
   }
 
@@ -875,7 +874,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
       fans[fan_index].use_hysteresys_curve = true;
     }
 
-    apply_fan_pwm();
+    fan_pwm_apply_updated_values();
 
     return chars_count;
   }
@@ -1108,7 +1107,7 @@ void write_to_page (const uint8_t page_index, const uint8_t payload[], const uin
   }
 }
 
-void apply_fan_pwm() {
+void fan_pwm_apply_updated_values() {
   uint8_t fan_duty_cycle[] = { 0, 0 };
 
   for (uint8_t fan_index = 0; fan_index < sizeof(fans) / sizeof(fans[0]); fan_index++) {
@@ -1252,7 +1251,7 @@ inline void handleFanCapture(FanCapture &fan) {
   fan.capture_buffer_index++;
 }
 
-void update_fans_rpm() {
+void fans_rpm_update() {
   for (uint8_t fan_index = 0; fan_index < sizeof(fans) / sizeof(fans[0]); fan_index++) {
     const uint16_t fan_rpm = calculate_fan_rpm(fans[fan_index]);
     fans[fan_index].current_rpm = fan_rpm;
@@ -1481,7 +1480,7 @@ void melody_play() {
     return;
   }
 
-  unsigned long elapsed_time = millis();
+  const unsigned long elapsed_time = millis();
   uint16_t play_time = elapsed_time - _melody_start_time;
   uint16_t prev_note_end_play_time = 0;
 
@@ -1508,7 +1507,7 @@ void melody_play() {
       }
 
       if (i > _melody_note_playing_index) {
-        uint16_t frequency = _melody_notes[i].frequency;
+        const uint16_t frequency = _melody_notes[i].frequency;
         if (frequency > 10) {
           tone(BUZZER_PIN, _melody_notes[i].frequency, _melody_notes[i].length);
         } else {
@@ -1565,6 +1564,10 @@ void play_error_sound(int8_t error_code) {
 }
 
 void display_page(const uint8_t index) {
+  if (_wait_status || _is_showing_alert || _is_showing_info) {
+    return;
+  }
+
   if (index <= DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST) {
     if (!display_page_texts[index]) {
       char header_text[] = "*** CUSTOM # ***";
@@ -1751,6 +1754,8 @@ void display_page_uptime() {
 
 void display_alert(const char *s1, const char *s2) {
   display_text_centered(s1, s2);
+  _is_showing_alert = true;
+  _is_showing_info = !_is_showing_alert;
   _display_alert_end_time = millis() + DISPLAY_ALERT_DURATION_IN_MILLISECONDS;
 
   // Play alert sound
@@ -1765,6 +1770,8 @@ void display_alert(const char *s1, const char *s2) {
 
 void display_message(const char *s1, const char *s2) {
   display_text_centered(s1, s2);
+  _is_showing_info = true;
+  _is_showing_alert = !_is_showing_info;
   _display_info_end_time = millis() + DISPLAY_INFO_DURATION_IN_MILLISECONDS;
 }
 
@@ -1800,7 +1807,13 @@ void display_text_centered(const char *s1, const char *s2) {
 }
 
 void display_wait_screen() {
-  if (!_wait_status) {
+  if (!_wait_status || _is_showing_alert || _is_showing_info) {
+    return;
+  }
+
+  if (_wait_status == WAIT_STATUS_SLEEP) {
+    lcd.send_line(0, "   SLEEP MODE   ");
+    lcd.send_line(1, "POWER to wake-up");
     return;
   }
 
@@ -1811,13 +1824,15 @@ void display_wait_screen() {
 
   if (_wait_status == WAIT_STATUS_SLEEP_PHASE1) {
     if (_disk_shutdown_delay_end_time) {
-      const int16_t seconds_to_hdd_power_off = (_disk_shutdown_delay_end_time - elapsed_time) / 1000;
+      if (_disk_shutdown_delay_end_time > elapsed_time) {
+        const unsigned long seconds_to_hdd_power_off = (_disk_shutdown_delay_end_time - elapsed_time) / 1000;
 
-      if (seconds_to_hdd_power_off > 99) {
-        strcopy(&line2[1], "in few minutes", DISPLAY_WIDTH);
-      } else if (seconds_to_hdd_power_off > 0) {
-        strcopy(&line2[3], "in 00 sec.", DISPLAY_WIDTH);
-        itoar(seconds_to_hdd_power_off, &line2[7]);
+        if (seconds_to_hdd_power_off > 99) {
+          strcopy(&line2[1], "in a few minutes", DISPLAY_WIDTH);
+        } else {
+          strcopy(&line2[3], "in 00 sec.", DISPLAY_WIDTH);
+          itoar(seconds_to_hdd_power_off, &line2[7]);
+        }
       } else {
         strcopy(&line2[6], "NOW!", DISPLAY_WIDTH);
       }
@@ -1826,12 +1841,6 @@ void display_wait_screen() {
       lcd.send_line(1, line2);
     }
 
-    return;
-  }
-
-  if (_wait_status == WAIT_STATUS_SLEEP) {
-    lcd.send_line(0, "   SLEEP MODE   ");
-    lcd.send_line(1, "POWER to wake-up");
     return;
   }
 
@@ -1968,9 +1977,7 @@ void enter_sleep_mode() {
   // if already down, then enter WAIT_STATUS_SLEEP_PHASE2 immediately
 
   if (_disk_shutdown_delay_in_seconds > 0) {
-    display_message("HDD powering OFF", "in a few seconds");
-
-    _disk_shutdown_delay_end_time = millis() + (_disk_shutdown_delay_in_seconds * 1000);
+    _disk_shutdown_delay_end_time = millis() + ((unsigned long)_disk_shutdown_delay_in_seconds * 1000);
     change_wait_status(WAIT_STATUS_SLEEP_PHASE1);
   } else {
     _disk_shutdown_delay_end_time = 0;
@@ -2042,8 +2049,8 @@ void fade_in_lcd_backlight() {
 
 void fade_lcd_update() {
   if (_lcd_brightness_current > _lcd_brightness_target) {
-    if (_lcd_brightness_current > _lcd_brightness_target + 5) {
-      _lcd_brightness_current -= 5;
+    if (_lcd_brightness_current > _lcd_brightness_target + _lcd_fade_speed_increment) {
+      _lcd_brightness_current -= _lcd_fade_speed_increment;
     } else {
       _lcd_brightness_current = _lcd_brightness_target;
     }
@@ -2054,8 +2061,8 @@ void fade_lcd_update() {
   }
   
   if (_lcd_brightness_current < _lcd_brightness_target) {
-    if (_lcd_brightness_current < _lcd_brightness_target - 5) {
-      _lcd_brightness_current += 5;
+    if (_lcd_brightness_current < _lcd_brightness_target - _lcd_fade_speed_increment) {
+      _lcd_brightness_current += _lcd_fade_speed_increment;
     } else {
       _lcd_brightness_current = _lcd_brightness_target;
     }
@@ -2067,7 +2074,7 @@ void fade_lcd_update() {
 }
 
 void rgb_led_restore_color() {
-  if (_wait_status != WAIT_STATUS_UNDEFINED) {
+  if (_wait_status || _is_showing_alert) {
     return;
   }
 
@@ -2171,7 +2178,7 @@ void rgb_led_update() {
     return;
   }
 
-  unsigned long elapsed_time = millis();
+  const unsigned long elapsed_time = millis();
 
   if (elapsed_time < _rgb_led_next_toggle_time) {
     return;
