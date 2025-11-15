@@ -370,53 +370,11 @@ void setup() {
 void loop() {
   wdt_reset();
 
-  const bool is_usb_suspended = USBDevice.isSuspended();
-  const bool is_usb_connected = USBDevice.configured();
-  const bool toggle_usb_suspended = !_was_usb_suspended && is_usb_suspended;
-  const bool toggle_usb_unsuspended = _was_usb_suspended && !is_usb_suspended;
-  const bool toggle_usb_connected = !_was_usb_connected && is_usb_connected;
-  const bool toggle_usb_disconnected = _was_usb_connected && !is_usb_connected;
-
   const unsigned long elapsed_time = millis();
   _is_showing_alert = elapsed_time < _display_alert_end_time;
   _is_showing_info = elapsed_time < _display_info_end_time;
 
-  if (_wait_status)
-  {
-    if (_wait_status == WAIT_STATUS_BOOT_PHASE1 && toggle_usb_connected) {
-      change_wait_status(WAIT_STATUS_BOOT_PHASE2);
-    } else if (_wait_status == WAIT_STATUS_BOOT_PHASE2 && Serial) {
-      change_wait_status(WAIT_STATUS_BOOT_PHASEN);
-    } else if (_wait_status == WAIT_STATUS_REBOOT_PHASE1 && toggle_usb_suspended) {
-      change_wait_status(WAIT_STATUS_REBOOT_PHASE2);
-    } else if (_wait_status == WAIT_STATUS_REBOOT_PHASE2 && toggle_usb_disconnected) {
-      // reset as on power cycle
-      while (1) {}
-    } else if (_wait_status == WAIT_STATUS_SHUTDOWN_PHASE1 && toggle_usb_suspended) {
-      change_wait_status(WAIT_STATUS_SHUTDOWN_PHASE2);
-    } else if (_wait_status == WAIT_STATUS_SLEEP_PHASE1) {
-      if (_disk_shutdown_delay_end_time) {
-        if (elapsed_time > _disk_shutdown_delay_end_time) {
-          hdd_power_off();
-          change_wait_status(WAIT_STATUS_SLEEP_PHASE2);
-        }
-      } else {
-        change_wait_status(WAIT_STATUS_SLEEP_PHASE2);
-      }
-    } else if (_wait_status == WAIT_STATUS_SLEEP_PHASE2) {
-      change_wait_status(WAIT_STATUS_SLEEP);
-      fade_out_lcd_backlight();
-    } else if ((_wait_status & WAIT_STATUS_MASK_SLEEP) == WAIT_STATUS_MASK_SLEEP && toggle_usb_unsuspended) {
-      exit_sleep_mode();
-    }
-  } else {
-    if (is_usb_connected && toggle_usb_suspended) {
-      enter_sleep_mode();
-    }
-  }
-
-  _was_usb_suspended = is_usb_suspended;
-  _was_usb_connected = is_usb_connected;
+  process_wait_status_changes(elapsed_time);
 
   if (Serial) {
     if (Serial.available() > 0) {
@@ -453,7 +411,7 @@ void loop() {
 
   melody_play();
 
-  process_status_changes();
+  process_external_status_changes();
 
   if (_is_showing_alert != _was_showing_alert) {
     _was_showing_alert = _is_showing_alert;
@@ -461,7 +419,7 @@ void loop() {
     rgb_led_restore_color();
   }
 
-  rgb_led_update();
+  rgb_led_update(elapsed_time);
 
   // Don't run any lower priority code when melody is playing, as it upsets duration timings
   if (_melody_is_playing) {
@@ -1999,10 +1957,61 @@ void hdd_power_off() {
   _disk_shutdown_delay_end_time = 0;
 
   display_message("Powering OFF", "all HDDs now");
+  hdd_power_off_now();
+}
+
+void hdd_power_off_now() {
   // TODO: change HDD power pin here
 }
 
-void process_status_changes() {
+void process_wait_status_changes(unsigned long elapsed_time) {
+  const bool is_usb_suspended = USBDevice.isSuspended();
+  const bool is_usb_connected = USBDevice.configured();
+  const bool toggle_usb_suspended = !_was_usb_suspended && is_usb_suspended;
+  const bool toggle_usb_unsuspended = _was_usb_suspended && !is_usb_suspended;
+  const bool toggle_usb_connected = !_was_usb_connected && is_usb_connected;
+  const bool toggle_usb_disconnected = _was_usb_connected && !is_usb_connected;
+
+  if (_wait_status)
+  {
+    if (_wait_status == WAIT_STATUS_BOOT_PHASE1 && toggle_usb_connected) {
+      change_wait_status(WAIT_STATUS_BOOT_PHASE2);
+    } else if (_wait_status == WAIT_STATUS_BOOT_PHASE2 && Serial) {
+      change_wait_status(WAIT_STATUS_BOOT_PHASEN);
+    } else if (_wait_status == WAIT_STATUS_REBOOT_PHASE1 && toggle_usb_suspended) {
+      change_wait_status(WAIT_STATUS_REBOOT_PHASE2);
+    } else if (_wait_status == WAIT_STATUS_REBOOT_PHASE2 && toggle_usb_disconnected) {
+      // reset as on power cycle
+      while (1) {}
+    } else if (_wait_status == WAIT_STATUS_SHUTDOWN_PHASE1 && toggle_usb_suspended) {
+      hdd_power_off_now();
+      change_wait_status(WAIT_STATUS_SHUTDOWN_PHASE2);
+    } else if (_wait_status == WAIT_STATUS_SLEEP_PHASE1) {
+      if (_disk_shutdown_delay_end_time) {
+        if (elapsed_time > _disk_shutdown_delay_end_time) {
+          hdd_power_off();
+          change_wait_status(WAIT_STATUS_SLEEP_PHASE2);
+        }
+      } else {
+        change_wait_status(WAIT_STATUS_SLEEP_PHASE2);
+      }
+    } else if (_wait_status == WAIT_STATUS_SLEEP_PHASE2) {
+      change_wait_status(WAIT_STATUS_SLEEP);
+      fade_out_lcd_backlight();
+    } else if ((_wait_status & WAIT_STATUS_MASK_SLEEP) == WAIT_STATUS_MASK_SLEEP && toggle_usb_unsuspended) {
+      exit_sleep_mode();
+    }
+  } else {
+    if (is_usb_connected && toggle_usb_suspended) {
+      enter_sleep_mode();
+    }
+  }
+
+  _was_usb_suspended = is_usb_suspended;
+  _was_usb_connected = is_usb_connected;
+}
+
+void process_external_status_changes() {
   bool status_toggle_0_1 = false;
   bool status_toggle_1_0 = false;
 
@@ -2173,12 +2182,10 @@ void rgb_led_set_colors(RgbColor *colors, uint8_t count, bool breathing_mode) {
   _rgb_led_next_toggle_time = 1;
 }
 
-void rgb_led_update() {
+void rgb_led_update(unsigned long elapsed_time) {
   if (_rgb_led_next_toggle_time == 0) {
     return;
   }
-
-  const unsigned long elapsed_time = millis();
 
   if (elapsed_time < _rgb_led_next_toggle_time) {
     return;
