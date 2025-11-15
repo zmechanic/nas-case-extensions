@@ -41,7 +41,7 @@ typedef enum {
 } WaitStatusMask;
 
 typedef enum {
-  WAIT_STATUS_UNDEFINED       =      0,
+  WAIT_STATUS_UNDEFINED       = 0,
   WAIT_STATUS_BOOT_PHASE1     = WAIT_STATUS_MASK_BOOT | 1,      // powered up
   WAIT_STATUS_BOOT_PHASE2     = WAIT_STATUS_MASK_BOOT | 2,      // USB connected (kernel loaded, CDC driver connected)
   WAIT_STATUS_BOOT_PHASEN     = WAIT_STATUS_MASK_BOOT | 3,      // user defined boot stages
@@ -89,6 +89,7 @@ static const uint16_t CMD_EXTERNAL_SENSOR_SET_NETWORK_STATUS = ('E' << 8) | 'N';
 static const uint16_t CMD_EXTERNAL_SENSOR_SET_ARRAY_STATUS = ('E' << 8) | 'A';
 static const uint16_t CMD_DISK_SHUTDOWN_DELAY_SET = ('H' << 8) | 'D';
 static const uint16_t CMD_DISK_TEMPERATURE_ALERT_SET = ('H' << 8) | 'A';
+static const uint16_t CMD_DISK_TEMPERATURE_FAN_HYSTERESYS_LINK_SET = ('H' << 8) | 'F';
 
 // Error return codes
 static const int8_t ERR_COMMAND_OVERFLOW = -1;
@@ -256,6 +257,7 @@ static unsigned long _display_info_end_time = 0;
 static bool _is_showing_alert = false;
 static bool _is_showing_info = false;
 
+static bool _disk_temperature_to_fan_speed_link_enabled = false;
 static uint8_t _disk_temperature_alert = 0;
 static uint8_t _disk_shutdown_delay_in_seconds = 0;
 static unsigned long _disk_shutdown_delay_end_time = 0;
@@ -967,6 +969,12 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     return chars_count;
   }
 
+  if (cmd == CMD_DISK_TEMPERATURE_FAN_HYSTERESYS_LINK_SET) {
+    const uint16_t *tokens = token_chunks[0].tokens;
+    _disk_temperature_to_fan_speed_link_enabled = tokens[0] != 0;
+    return chars_count;
+  }
+
   return ERR_UNKNOWN_COMMAND;
 }
 
@@ -1068,9 +1076,19 @@ void write_to_page (const uint8_t page_index, const uint8_t payload[], const uin
 void fan_pwm_apply_updated_values() {
   uint8_t fan_duty_cycle[] = { 0, 0 };
 
+  uint8_t external_sensor_hdd_temp_max = SENSOR_NOT_PRESENT;
+
+  if (_disk_temperature_to_fan_speed_link_enabled) {
+    for (uint8_t disk_index = 0; disk_index <= EXT_TEMP_SENSOR_INDEX_HDD_LAST - EXT_TEMP_SENSOR_INDEX_HDD1; disk_index++) {
+      if (ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1] > external_sensor_hdd_temp_max) {
+        external_sensor_hdd_temp_max = ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1];
+      }
+    }
+  }
+
   for (uint8_t fan_index = 0; fan_index < sizeof(fans) / sizeof(fans[0]); fan_index++) {
     if (fans[fan_index].use_hysteresys_curve) {
-      const int8_t current_temp = temps[fan_index].current_temp;
+      const int8_t current_temp = fan_index == 0 && external_sensor_hdd_temp_max > 0 ? external_sensor_hdd_temp_max : temps[fan_index].current_temp;
       if (current_temp > 0) {
         if (current_temp <= 10) {
           fans[fan_index].req_duty_percentage = fans[fan_index].hysteresys_curve[0];
