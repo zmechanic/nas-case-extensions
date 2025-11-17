@@ -901,7 +901,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
       const uint8_t max_number_of_sensors = (sizeof(temps) / sizeof(temps[0]));
       const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
       const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
-      temps[sensor_index].alert_temp = tokens[1] < 255 ? tokens[1] : 0;
+      temps[sensor_index].alert_temp = tokens[1] > 255 ? 0 : tokens[1];
       temps[sensor_index].alert_trigger = 0;
 
       if (tokens_count > 2) {
@@ -926,16 +926,15 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
       if (cmd == CMD_EXTERNAL_SENSOR_SET_LOAD) {
         const uint8_t max_number_of_sensors = (sizeof(ext_loads) / sizeof(ext_loads[0]));
         const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
-        const uint8_t percentage = tokens[1] < 100 ? tokens[1] : 100;
-        ext_loads[sensor_index] = tokens[1]; break;
+        ext_loads[sensor_index] = tokens[1] > 255 ? SENSOR_NOT_PRESENT : tokens[1] < 100 ? tokens[1] : 100;
       } else if (cmd == CMD_EXTERNAL_SENSOR_SET_FANS) {
         const uint8_t max_number_of_sensors = (sizeof(ext_fans) / sizeof(ext_fans[0]));
         const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
-        ext_fans[sensor_index] = tokens[1]; break;
+        ext_fans[sensor_index] = tokens[1] > 8000 ? SENSOR_NOT_PRESENT : tokens[1];
       } else if (cmd == CMD_EXTERNAL_SENSOR_SET_TEMP) {
         const uint8_t max_number_of_sensors = (sizeof(ext_temps) / sizeof(ext_temps[0]));
         const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
-        ext_temps[sensor_index] = tokens[1]; break;
+        ext_temps[sensor_index] = tokens[1] > 255 ? SENSOR_NOT_PRESENT : tokens[1] < 127 ? tokens[1] : 127;
       }
     }
 
