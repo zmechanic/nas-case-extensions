@@ -121,6 +121,7 @@ typedef enum {
   DISPLAY_PAGE_TYPE_LOAD_CPU,
   DISPLAY_PAGE_TYPE_LOAD_RAM,
   DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS,
+  DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE,
   DISPLAY_PAGE_TYPE_UPTIME,
   DISPLAY_PAGE_TYPE__DO_NOT_REMOVE
 } DisplayPageTypes;
@@ -225,6 +226,8 @@ static const int HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS = 30000;
 // This helps touch/capacitive buttons to stabilize. Can be 0 for physical contact buttons.
 static const int DISPLAY_BUTTON_IGNORE_PERIOD_IN_MILLISECONDS = 5000;
 
+static const RgbColor RGB_WHITE = {255, 255, 150};
+
 static bool _use_fahrenheit_temp = false;
 
 static bool _melody_is_playing = false;
@@ -265,6 +268,10 @@ static unsigned long _disk_shutdown_delay_end_time = 0;
 static bool _disk_power_state = false;
 static unsigned long _disk_power_last_toggle = 0;
 static uint8_t _disk_power_button_debouncer = 0;
+static float _disk_voltage_12v = 0;
+static float _disk_voltage_12v_kf = 15.0 / 1023.0;
+static float _disk_voltage_5v = 0;
+static float _disk_voltage_5v_kf = 8.0 / 1023.0;
 
 static uint8_t _display_button_right_debouncer = 0;
 static uint8_t _display_button_left_debouncer = 0;
@@ -297,10 +304,7 @@ static Waveshare_LCD1602 lcd(16, 2);
 
 void setup() {
   wdt_disable();
-  wdt_enable(WDTO_2S);
-
-  // ADC reference voltage
-  analogReference(DEFAULT);
+  wdt_enable(WDTO_500MS);
 
   // Configure pins for buttons
   pinMode(HDD_POWER_BUTTON_PIN, INPUT_PULLUP);
@@ -311,8 +315,8 @@ void setup() {
   pinMode(RGB_LED_PIN, OUTPUT);
   digitalWrite(RGB_LED_PIN, LOW);
 
-  // RGB LED white on power up
-  rgb_led_send_data(255, 255, 150);
+  // RGB LEDs all white on power up
+  rgb_led_update_all(RGB_WHITE);
 
   i2c_init();
   lcd.init();
@@ -324,6 +328,9 @@ void setup() {
   // Beep on power up
   tone(BUZZER_PIN, 800, 200);
 
+  // ADC reference voltage
+  analogReference(INTERNAL);
+
   // TODO: Check 12v/5v power supply to HDD on reset, and if it's already ON then skip the power button check
   // and also set `_disk_power_state` to reflect current state
   for (uint8_t i = 0; i < 100; i++) {
@@ -333,9 +340,8 @@ void setup() {
 
     process_hdd_power_button(i);
     delay(1);
+    wdt_reset();
   }
-
-  wdt_reset();
 
   exit_sleep_mode();
 
@@ -365,8 +371,7 @@ void setup() {
     tone(BUZZER_PIN, 800, 200);
   }
 
-  wdt_disable();
-  wdt_enable(WDTO_500MS);
+  wdt_reset();
 }
 
 void loop() {
@@ -435,15 +440,16 @@ void loop() {
     _last_check_time_1o4_second_counter++;
 
     fans_rpm_update();
-
-    //int adcValue = analogRead(ADC_PIN);
-    //Serial.println(fan_rpm);
   }
 
   // *** LOW PRIORITY CODE STARTS HERE ***
   // Every 1 second updates
   if (_last_check_time_1o4_second_counter % 4) {
     fan_pwm_apply_updated_values();
+
+    _disk_voltage_12v = (float)analogRead(ADC_PIN_12V) * _disk_voltage_12v_kf;
+    _disk_voltage_5v = (float)analogRead(ADC_PIN_5V) * _disk_voltage_5v_kf;
+    //Serial.println(fan_rpm);
 
     if (!_is_showing_alert && !_is_showing_info) {
       if (_wait_status) {
@@ -1229,6 +1235,11 @@ inline void handleFanCapture(FanCapture &fan) {
 void fans_rpm_update() {
   for (uint8_t fan_index = 0; fan_index < sizeof(fans) / sizeof(fans[0]); fan_index++) {
     const uint16_t fan_rpm = calculate_fan_rpm(fans[fan_index]);
+
+    if (fan_rpm == 0 && fans[fan_index].current_rpm == SENSOR_NOT_PRESENT) {
+      continue;
+    }
+
     fans[fan_index].current_rpm = fan_rpm;
 
     if (fans[fan_index].alert_rpm && fan_rpm < fans[fan_index].alert_rpm) {
@@ -1292,14 +1303,14 @@ void temp_sensors_update() {
       continue;
     }
 
-    const float tempC = tempSensors.getTempC(temps[temp_index].address);
-    if (tempC == DEVICE_DISCONNECTED_C) {
+    const float temp = tempSensors.getTempC(temps[temp_index].address);
+    if (temp <= DEVICE_DISCONNECTED_C) {
       temps[temp_index].current_temp = SENSOR_NOT_PRESENT;
       temps[temp_index].alert_trigger++;
       continue;
     }
 
-    temps[temp_index].current_temp = static_cast<int8_t>(tempC) + temps[temp_index].correction;
+    temps[temp_index].current_temp = static_cast<int8_t>(temp) + temps[temp_index].correction;
     if (temps[temp_index].current_temp >= temps[temp_index].alert_temp) {
       temps[temp_index].alert_trigger++;
     } else {
@@ -1323,18 +1334,23 @@ void process_hdd_power_button(unsigned long elapsed_time) {
       const uint16_t seconds_left = (HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS - ms_since_last_toggle) / 1000;
       char line[] = "wait     sec. to";
       itoar(seconds_left, &line[7]);
-      display_alert(line, "toggle HDD power");
+      display_message(line, "toggle HDD power");
+      const MelodyNote play_notes[] = { { 300, 50 }, { 600, 50 }, { 300, 50 } };
+      melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
       return;
     }
   }
 
   if (!_disk_power_state) {
-    display_alert("HDD power ON", "\xFF\xFF");
+    display_message("HDD power ON", "\xFF\xFF");
     _disk_power_state = true;
   } else {
-    display_alert("HDD power OFF", "\x01\x05");
+    display_message("HDD power OFF", "\x01\x05");
     _disk_power_state = false;
   }
+
+  const MelodyNote play_notes[] = { { 1200, 25 } };
+  melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
 
   _disk_power_last_toggle = elapsed_time;
 }
@@ -1570,6 +1586,7 @@ void display_page(const uint8_t index) {
     case DISPLAY_PAGE_TYPE_LOAD_CPU: display_page_load("CPU load", ext_loads[EXT_LOAD_SENSOR_INDEX_CPU]); return;
     case DISPLAY_PAGE_TYPE_LOAD_RAM: display_page_load("RAM alloc", ext_loads[EXT_LOAD_SENSOR_INDEX_RAM]); return;
     case DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS: display_page_all_disk_loads(); return;
+    case DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE: display_page_hdd_cage_voltage(); return;
     case DISPLAY_PAGE_TYPE_UPTIME: display_page_uptime(); return;
     default: return;
   }
@@ -1581,10 +1598,10 @@ void display_page_sensor(const char *title, const int16_t fan_rpm, const int8_t 
   if (fan_rpm >= 0) {
     itoar(fan_rpm, &line2[3]);
   } else {
-    line2[0] = '/';
-    line2[1] = '/';
-    line2[2] = '/';
-    line2[3] = '/';
+    line2[0] = '-';
+    line2[1] = '-';
+    line2[2] = '-';
+    line2[3] = '-';
   }
 
   write_temperature(&line2[12], temp, 4);
@@ -1673,9 +1690,9 @@ void display_page_load(const char *caption, const int8_t percentage) {
       }
     }
   } else {
-    line1[11] = '/';
-    line1[12] = '/';
-    line1[13] = '/';
+    line1[11] = '-';
+    line1[12] = '-';
+    line1[13] = '-';
   }
 
   lcd.send_line(0, line1);
@@ -1700,8 +1717,26 @@ void display_page_all_disk_loads() {
       continue;
     }
 
-    itoar(&line2[char_offset + 2], ext_loads[disk_index + EXT_LOAD_SENSOR_INDEX_HDD1]);
+    itoar(ext_loads[disk_index + EXT_LOAD_SENSOR_INDEX_HDD1], &line2[char_offset + 2]);
   }
+
+  lcd.send_line(0, line1);
+  lcd.send_line(1, line2);
+}
+
+void display_page_hdd_cage_voltage() {
+  char line1[] = "HDD cage voltage";
+  char line2[] = "12v:00.0  5v:0.0";
+
+  int int_part_12v = (int)_disk_voltage_12v;
+  int dec_part_12v = (int)(((float)_disk_voltage_12v - (float)int_part_12v) * 10.0f);
+  itoar(int_part_12v, &line2[5]);
+  itoar(dec_part_12v, &line2[7]);
+
+  int int_part_5v = (int)_disk_voltage_5v;
+  int dec_part_5v = (int)(((float)_disk_voltage_5v - (float)int_part_5v) * 10.0f);
+  itoar(int_part_5v, &line2[13]);
+  itoar(dec_part_5v, &line2[15]);
 
   lcd.send_line(0, line1);
   lcd.send_line(1, line2);
@@ -1849,7 +1884,7 @@ void display_wait_screen() {
   lcd.send_line(1, line2);
 }
 
-void change_wait_status(WaitStatus new_status) {
+void change_wait_status(const WaitStatus new_status) {
   const uint8_t old_status = _wait_status;
 
   if (new_status == old_status) {
@@ -1981,7 +2016,7 @@ void hdd_power_off_now() {
   // TODO: change HDD power pin here
 }
 
-void process_wait_status_changes(unsigned long elapsed_time) {
+void process_wait_status_changes(const unsigned long elapsed_time) {
   const bool is_usb_suspended = USBDevice.isSuspended();
   const bool is_usb_connected = USBDevice.configured();
   const bool toggle_usb_suspended = !_was_usb_suspended && is_usb_suspended;
@@ -2105,32 +2140,13 @@ void rgb_led_restore_color() {
   }
 
   if (_rgb_led_colors_user_mode == RGB_LED_USER_MODE_NONE) {
-    if (_is_network_connected) {
-      if (_is_array_started) {
-        RgbColor rgb_color[] = { { 0, 255, 0, 0 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), false);
-      } else {
-        RgbColor rgb_color[] = { { 255, 70, 0, 0 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), false);
-      }
-      return;
-    } else {
-      if (_is_array_started) {
-        RgbColor rgb_color[] = { { 0, 255, 0, 1000 }, { 0, 0, 0, 100 }, { 0, 255, 0, 100 }, { 0, 0, 0, 100 }, { 0, 255, 0, 100 }, { 0, 0, 0, 500 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), false);
-      } else {
-        RgbColor rgb_color[] = { { 255, 70, 0, 1000 }, { 0, 0, 0, 100 }, { 255, 70, 0, 100 }, { 0, 0, 0, 100 }, { 255, 70, 0, 100 }, { 0, 0, 0, 500 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), false);
-      }
-      return;
-    }
     return;
   }
 
   rgb_led_set_colors(_rgb_led_colors_user_set, sizeof(_rgb_led_colors_user_set) / sizeof(_rgb_led_colors_user_set[0]), _rgb_led_colors_user_mode == RGB_LED_USER_MODE_BREATHING_COLOR);
 }
 
-uint32_t compute_rgb_config_hash(const struct RgbColor* colors, size_t num_colors, bool breathing_mode) {
+uint32_t compute_rgb_config_hash(const RgbColor *colors, const size_t num_colors, const bool breathing_mode) {
     uint32_t hash = 5381;
     hash = ((hash << 5) + hash) + (breathing_mode ? 1 : 0);
     
@@ -2145,7 +2161,7 @@ uint32_t compute_rgb_config_hash(const struct RgbColor* colors, size_t num_color
     return hash;
 }
 
-void rgb_led_set_colors(RgbColor *colors, uint8_t count, bool breathing_mode) {
+void rgb_led_set_colors(const RgbColor *colors, const uint8_t count, const bool breathing_mode) {
   if (colors && count > 0) {
     const uint32_t oldColorHash = compute_rgb_config_hash(_rgb_led_colors, count, RGB_LED_USER_MODE_NONE);
     const uint32_t newColorHash = compute_rgb_config_hash(colors, count, RGB_LED_USER_MODE_NONE);
@@ -2199,7 +2215,7 @@ void rgb_led_set_colors(RgbColor *colors, uint8_t count, bool breathing_mode) {
   _rgb_led_next_toggle_time = 1;
 }
 
-void rgb_led_update(unsigned long elapsed_time) {
+void rgb_led_update(const unsigned long elapsed_time) {
   if (_rgb_led_next_toggle_time == 0) {
     return;
   }
@@ -2243,21 +2259,21 @@ void rgb_led_update(unsigned long elapsed_time) {
     _rgb_led_colors[2].g = g;
     _rgb_led_colors[2].b = b;
 
-    rgb_led_send_data(_rgb_led_colors[2].r, _rgb_led_colors[2].g, _rgb_led_colors[2].b);
+    rgb_led_update_all(_rgb_led_colors[2]);
     _rgb_led_next_toggle_time += RGB_LED_BREATH_INCREMENT_IN_MILLISECONDS;
     return;
   }
 
-  const RgbColor *rgb_color = &_rgb_led_colors[_rgb_led_toggle_counter];
-  rgb_led_send_data(rgb_color->r, rgb_color->g, rgb_color->b);
+  const RgbColor rgb_color = _rgb_led_colors[_rgb_led_toggle_counter];
+  rgb_led_update_all(rgb_color);
 
-  if (rgb_color->length == 0) {
+  if (rgb_color.length == 0) {
     _rgb_led_next_toggle_time = 0;
     _rgb_led_toggle_counter = 0;
     return;
   }
 
-  _rgb_led_next_toggle_time = elapsed_time + rgb_color->length;
+  _rgb_led_next_toggle_time = elapsed_time + rgb_color.length;
   _rgb_led_toggle_counter++;
 
   if (_rgb_led_toggle_counter == 1 && _rgb_led_colors[1].length == 0) {
@@ -2269,7 +2285,35 @@ void rgb_led_update(unsigned long elapsed_time) {
   }
 }
 
-void rgb_led_send_data(uint8_t r, uint8_t g, uint8_t b) {
+void rgb_led_update_all(const RgbColor color) {
+  // LED #1 and #2 (same color for first 2 LEDs)
+  rgb_led_send_data(color.r, color.g, color.b);
+  rgb_led_send_data(color.r, color.g, color.b);
+
+  RgbColor array_led_color;
+  RgbColor network_led_color;
+
+  if (_is_network_connected > 0) {
+    network_led_color = { 0, 255, 0, 0 };
+  } else if (_is_network_connected == 0) {
+    network_led_color = { 255, 0, 0, 0 };
+  } else {
+    network_led_color = { 0, 255, 0, 0 };
+  }
+
+  if (_is_array_started > 0) {
+    array_led_color = { 0, 255, 0, 0 };
+  } else if (_is_array_started == 0) {
+    array_led_color = { 255, 0, 0, 0 };
+  } else {
+    array_led_color = { 0, 255, 0, 0 };
+  }
+
+  rgb_led_send_data(array_led_color.r, array_led_color.g, array_led_color.b);
+  rgb_led_send_data(network_led_color.r, network_led_color.g, network_led_color.b);
+}
+
+void rgb_led_send_data(const uint8_t r, const uint8_t g, const uint8_t b) {
   noInterrupts();
 
   for (uint8_t c = 0; c < 3; c++) {
@@ -2361,10 +2405,10 @@ void itoar(int val, char *end) {
   }
 }
 
-void write_temperature(char *target, int8_t value, uint8_t max_len) {
+void write_temperature(char *target, const int8_t value, const uint8_t max_len) {
   if (value == SENSOR_NOT_PRESENT) {
     for (uint8_t i = 0; i < max_len; i++) {
-      *(target - i) = '/';
+      *(target - i) = '-';
     }
     return;
   }
