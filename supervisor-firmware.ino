@@ -66,6 +66,7 @@ static const uint16_t CMD_ENTER_HYBERNATE_MODE = ('#' << 8) | 'H';
 static const uint16_t CMD_RGB_LED_COLOR_RESET = ('L' << 8) | 'R';
 static const uint16_t CMD_RGB_LED_COLOR_SET = ('L' << 8) | 'C';
 static const uint16_t CMD_RGB_LED_BREATH_SET = ('L' << 8) | 'B';
+static const uint16_t CMD_RGB_LED_STATUS_COLOR_SET = ('L' << 8) | 'S';
 static const uint16_t CMD_SOUND_PLAY = ('S' << 8) | 'P';
 static const uint16_t CMD_SOUND_ALERT_SET = ('S' << 8) | 'A';
 static const uint16_t CMD_FAN_SPEED_SET = ('F' << 8) | 'S';
@@ -226,7 +227,12 @@ static const int HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS = 30000;
 // This helps touch/capacitive buttons to stabilize. Can be 0 for physical contact buttons.
 static const int DISPLAY_BUTTON_IGNORE_PERIOD_IN_MILLISECONDS = 5000;
 
-static const RgbColor RGB_WHITE = {255, 255, 150};
+// Some fixed colours for RGB LEDs
+static const RgbColor RGB_BLACK = { 0, 0, 0 };
+static const RgbColor RGB_WHITE = { 255, 255, 150 };
+static const RgbColor RGB_RED = { 255, 0, 0 };
+static const RgbColor RGB_GREEN = { 0, 255, 0 };
+static const RgbColor RGB_YELLOW = { 255, 70, 0 };
 
 static bool _use_fahrenheit_temp = false;
 
@@ -241,6 +247,7 @@ static uint16_t _alert_sound_duration = 500;
 
 static uint16_t _fan_carrier_freq = 25000;
 
+static RgbColor _rgb_led_status_user_set[2];
 static RgbColor _rgb_led_colors[8];
 static uint8_t _rgb_led_toggle_counter = 0;
 static unsigned long _rgb_led_next_toggle_time = 0;
@@ -304,7 +311,7 @@ static Waveshare_LCD1602 lcd(16, 2);
 
 void setup() {
   wdt_disable();
-  wdt_enable(WDTO_500MS);
+  wdt_enable(WDTO_2S);
 
   // Configure pins for buttons
   pinMode(HDD_POWER_BUTTON_PIN, INPUT_PULLUP);
@@ -372,6 +379,7 @@ void setup() {
   }
 
   wdt_reset();
+  wdt_enable(WDTO_500MS);
 }
 
 void loop() {
@@ -418,12 +426,14 @@ void loop() {
 
   melody_play();
 
-  process_external_status_changes();
-
   if (_is_showing_alert != _was_showing_alert) {
     _was_showing_alert = _is_showing_alert;
 
     rgb_led_restore_color();
+  }
+
+  if (process_external_status_changes()) {
+    rgb_led_update_all();
   }
 
   rgb_led_update(elapsed_time);
@@ -449,7 +459,6 @@ void loop() {
 
     _disk_voltage_12v = (float)analogRead(ADC_PIN_12V) * _disk_voltage_12v_kf;
     _disk_voltage_5v = (float)analogRead(ADC_PIN_5V) * _disk_voltage_5v_kf;
-    //Serial.println(fan_rpm);
 
     if (!_is_showing_alert && !_is_showing_info) {
       if (_wait_status) {
@@ -462,6 +471,7 @@ void loop() {
     }
 
     rgb_led_restore_color();
+    rgb_led_update_all();
   }
 
   // Don't run any other code in sleep
@@ -671,7 +681,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
       }
 
       const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-      if (tokens_count < 3) {
+      if (tokens_count != 3 || tokens_count != 4) {
         return ERR_INVALID_PARAMETERS;
       }
 
@@ -692,6 +702,28 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     }
 
     rgb_led_set_colors(_rgb_led_colors_user_set, sizeof(_rgb_led_colors_user_set) / sizeof(_rgb_led_colors_user_set[0]), _rgb_led_colors_user_mode == RGB_LED_USER_MODE_BREATHING_COLOR);
+
+    return chars_count;
+  }
+
+  if (cmd == CMD_RGB_LED_STATUS_COLOR_SET) {
+    for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
+      if (token_chunk_index >= sizeof(_rgb_led_status_user_set) / sizeof(_rgb_led_status_user_set[0])) {
+        return ERR_INVALID_PARAMETERS;
+      }
+
+      const uint8_t tokens_count = token_chunks[token_chunk_index].count;
+      if (tokens_count != 3) {
+        return ERR_INVALID_PARAMETERS;
+      }
+
+      RgbColor *color = &_rgb_led_status_user_set[token_chunk_index];
+
+      const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
+      color->r = tokens[0];
+      color->g = tokens[1];
+      color->b = tokens[2];
+    }
 
     return chars_count;
   }
@@ -952,10 +984,10 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
     switch (cmd) {
       case CMD_EXTERNAL_SENSOR_SET_NETWORK_STATUS:
-        _is_network_connected = tokens[0] < 2 ? tokens[0] : SENSOR_NOT_PRESENT;
+        _is_network_connected = tokens[0] < 3 ? tokens[0] : SENSOR_NOT_PRESENT;
         break;
       case CMD_EXTERNAL_SENSOR_SET_ARRAY_STATUS:
-        _is_array_started = tokens[0] < 2 ? tokens[0] : SENSOR_NOT_PRESENT;
+        _is_array_started = tokens[0] < 3 ? tokens[0] : SENSOR_NOT_PRESENT;
         break;
     }
 
@@ -1774,8 +1806,10 @@ void display_alert(const char *s1, const char *s2) {
 
   // Turn RGB LED Red
   const uint16_t blink_period = DISPLAY_ALERT_DURATION_IN_MILLISECONDS / 5;
-  RgbColor rgb_color[] = { { 255, 0, 0, blink_period },  { 0, 0, 0, blink_period } };
-  rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), false);
+  RgbColor rgb_color[] = { RGB_RED, RGB_BLACK };
+  rgb_color[0].length = blink_period;
+  rgb_color[1].length = blink_period;
+  rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[0]), false);
 }
 
 void display_message(const char *s1, const char *s2) {
@@ -1912,41 +1946,46 @@ void change_wait_status(const WaitStatus new_status) {
   switch (new_status) {
     case WAIT_STATUS_BOOT_PHASE1:
       {
-        RgbColor rgb_color[] = { { 255, 255, 150, 800 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), true);
+        RgbColor rgb_color[] = { RGB_WHITE };
+        rgb_color[0].length = 800;
+        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[0]), true);
         break;
       }
     case WAIT_STATUS_BOOT_PHASE2:
       {
-        RgbColor rgb_color[] = { { 0, 255, 0, 400 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), true);
+        RgbColor rgb_color[] = { RGB_GREEN };
+        rgb_color[0].length = 400;
+        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[0]), true);
         break;
       }
     case WAIT_STATUS_BOOT_PHASEN:
       {
-        RgbColor rgb_color[] = { { 0, 255, 0, 150 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), true);
+        RgbColor rgb_color[] = { RGB_GREEN };
+        rgb_color[0].length = 150;
+        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[0]), true);
         break;
       }
     case WAIT_STATUS_SHUTDOWN_PHASE1:
     case WAIT_STATUS_REBOOT_PHASE1:
       {
-        RgbColor rgb_color[] = { { 255, 70, 0, 400 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), true);
+        RgbColor rgb_color[] = { RGB_YELLOW };
+        rgb_color[0].length = 400;
+        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[0]), true);
         break;
       }
     case WAIT_STATUS_REBOOT_PHASE2:
     case WAIT_STATUS_SLEEP_PHASE1:
       {
-        RgbColor rgb_color[] = { { 255, 70, 0, 150 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), true);
+        RgbColor rgb_color[] = { RGB_YELLOW };
+        rgb_color[0].length = 150;
+        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[0]), true);
         break;
       }
     case WAIT_STATUS_SHUTDOWN_PHASE2:
     case WAIT_STATUS_SLEEP_PHASE2:
       {
-        RgbColor rgb_color[] = { { 255, 70, 0, 0 } };
-        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[1]), false);
+        RgbColor rgb_color[] = { RGB_YELLOW };
+        rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[0]), false);
         break;
       }
     case WAIT_STATUS_UNDEFINED:
@@ -2063,7 +2102,7 @@ void process_wait_status_changes(const unsigned long elapsed_time) {
   _was_usb_connected = is_usb_connected;
 }
 
-void process_external_status_changes() {
+bool process_external_status_changes() {
   bool status_toggle_0_1 = false;
   bool status_toggle_1_0 = false;
 
@@ -2098,6 +2137,8 @@ void process_external_status_changes() {
     const MelodyNote play_notes[] = { { 400, 150 }, { 600, 150 }, { 800, 150 } };
     melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
   }
+
+  return status_toggle_1_0 | status_toggle_0_1;
 }
 
 void fade_out_lcd_backlight() {
@@ -2140,6 +2181,7 @@ void rgb_led_restore_color() {
   }
 
   if (_rgb_led_colors_user_mode == RGB_LED_USER_MODE_NONE) {
+    rgb_led_set_colors(&RGB_GREEN, 1, false);
     return;
   }
 
@@ -2259,21 +2301,21 @@ void rgb_led_update(const unsigned long elapsed_time) {
     _rgb_led_colors[2].g = g;
     _rgb_led_colors[2].b = b;
 
-    rgb_led_update_all(_rgb_led_colors[2]);
     _rgb_led_next_toggle_time += RGB_LED_BREATH_INCREMENT_IN_MILLISECONDS;
+    rgb_led_update_all();
+
     return;
   }
 
-  const RgbColor rgb_color = _rgb_led_colors[_rgb_led_toggle_counter];
-  rgb_led_update_all(rgb_color);
+  rgb_led_update_all();
 
-  if (rgb_color.length == 0) {
+  if (_rgb_led_colors[_rgb_led_toggle_counter].length == 0) {
     _rgb_led_next_toggle_time = 0;
     _rgb_led_toggle_counter = 0;
     return;
   }
 
-  _rgb_led_next_toggle_time = elapsed_time + rgb_color.length;
+  _rgb_led_next_toggle_time = elapsed_time + _rgb_led_colors[_rgb_led_toggle_counter].length;
   _rgb_led_toggle_counter++;
 
   if (_rgb_led_toggle_counter == 1 && _rgb_led_colors[1].length == 0) {
@@ -2285,50 +2327,72 @@ void rgb_led_update(const unsigned long elapsed_time) {
   }
 }
 
-void rgb_led_update_all(const RgbColor color) {
-  // LED #1 and #2 (same color for first 2 LEDs)
-  rgb_led_send_data(color.r, color.g, color.b);
-  rgb_led_send_data(color.r, color.g, color.b);
-
-  RgbColor array_led_color;
-  RgbColor network_led_color;
-
-  if (_is_network_connected > 0) {
-    network_led_color = { 0, 255, 0, 0 };
-  } else if (_is_network_connected == 0) {
-    network_led_color = { 255, 0, 0, 0 };
-  } else {
-    network_led_color = { 0, 255, 0, 0 };
-  }
-
-  if (_is_array_started > 0) {
-    array_led_color = { 0, 255, 0, 0 };
-  } else if (_is_array_started == 0) {
-    array_led_color = { 255, 0, 0, 0 };
-  } else {
-    array_led_color = { 0, 255, 0, 0 };
-  }
-
-  rgb_led_send_data(array_led_color.r, array_led_color.g, array_led_color.b);
-  rgb_led_send_data(network_led_color.r, network_led_color.g, network_led_color.b);
+void rgb_led_update_all() {
+  rgb_led_update_all(_rgb_led_breath_direction != 0 ? _rgb_led_colors[2] : _rgb_led_colors[_rgb_led_toggle_counter]);
 }
 
-void rgb_led_send_data(const uint8_t r, const uint8_t g, const uint8_t b) {
+void rgb_led_update_all(const RgbColor color) {
+  RgbColor array_led_color = RGB_BLACK;
+  RgbColor network_led_color = RGB_BLACK;
+
+  if (_is_network_connected == SENSOR_NOT_PRESENT) {
+    if (_rgb_led_status_user_set[0].r || _rgb_led_status_user_set[0].g || _rgb_led_status_user_set[0].b) {
+      network_led_color = _rgb_led_status_user_set[0];
+    } else {
+      network_led_color = RGB_WHITE;
+    }
+  } else if (_is_network_connected == 0) {
+    network_led_color = RGB_RED;
+  } else if (_is_network_connected == 1) {
+    network_led_color = RGB_GREEN;
+  } else if (_is_network_connected > 0) {
+    network_led_color = RGB_YELLOW;
+  }
+
+  if (_is_network_connected == SENSOR_NOT_PRESENT) {
+    if (_rgb_led_status_user_set[1].r || _rgb_led_status_user_set[1].g || _rgb_led_status_user_set[1].b) {
+      array_led_color = _rgb_led_status_user_set[1];
+    } else {
+      array_led_color = RGB_WHITE;
+    }
+  } else if (_is_array_started == 0) {
+    array_led_color = RGB_RED;
+  } else if (_is_array_started == 1) {
+    array_led_color = RGB_GREEN;
+  } else if (_is_array_started > 0) {
+    array_led_color = RGB_YELLOW;
+  }
+
+  const uint8_t status_led_dimming = 4;
+
+  uint8_t led_data[] = {
+    color.r, color.g, color.b,  // LED #1 and #2 (same color for first 2 LEDs)
+    color.r, color.g, color.b,  // LED #1 and #2 (same color for first 2 LEDs)
+    array_led_color.r >> status_led_dimming, array_led_color.g >> status_led_dimming, array_led_color.b >> status_led_dimming,
+    network_led_color.r >> status_led_dimming, network_led_color.g >> status_led_dimming, network_led_color.b >> status_led_dimming };
+
+  rgb_led_send_data(led_data, sizeof(led_data) / 3);
+}
+
+void rgb_led_send_data(const uint8_t *rgb_data, const uint8_t num_leds) {
   noInterrupts();
 
-  for (uint8_t c = 0; c < 3; c++) {
-    const uint8_t byte = c == 0 ? g : c == 1 ? r : b;
-    for (uint8_t i = 0; i < 8; i++) {
-      if ((byte << i) & 0x80) {
-        RGB_LED_PORT |= (1 << RGB_LED_BIT);
-        __asm__ __volatile__ ("nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t");
-        RGB_LED_PORT &= ~(1 << RGB_LED_BIT);
-        __asm__ __volatile__ ("nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t");
-      } else {
-        RGB_LED_PORT |= (1 << RGB_LED_BIT);
-        __asm__ __volatile__ ("nop\n\t nop\n\t");
-        RGB_LED_PORT &= ~(1 << RGB_LED_BIT);
-        __asm__ __volatile__ ("nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t");
+  for (uint8_t led_index = 0; led_index < num_leds; led_index++) {
+    const uint8_t *led_data = &rgb_data[led_index * 3];
+    for (uint8_t color_index = 0; color_index < 3; color_index++) {
+      const uint8_t byte = color_index == 0 ? led_data[1] : color_index == 1 ? led_data[0] : led_data[2];
+      for (uint8_t i = 0; i < 8; i++) {
+        if ((byte << i) & 0x80) {
+          RGB_LED_PORT |= (1 << RGB_LED_BIT);
+          __asm__ __volatile__ ("nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t");
+          RGB_LED_PORT &= ~(1 << RGB_LED_BIT);
+          __asm__ __volatile__ ("nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t");
+        } else {
+          RGB_LED_PORT |= (1 << RGB_LED_BIT);
+          __asm__ __volatile__ ("nop\n\t nop\n\t");
+          RGB_LED_PORT &= ~(1 << RGB_LED_BIT);
+          __asm__ __volatile__ ("nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t");
+        }
       }
     }
   }
