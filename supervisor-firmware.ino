@@ -16,19 +16,19 @@
 #include <SoftI2CMaster.h>
 #include <Waveshare_LCD1602.h>
 
-static const uint8_t ADC_PIN_12V = A2;
-static const uint8_t ADC_PIN_5V = A3;
-static const uint8_t BUZZER_PIN = 8;
+static const uint8_t ADC_PIN_12V = ADC4D; // Arduion pin A3
+static const uint8_t ADC_PIN_5V = ADC5D;  // Arduion pin A2
+static const uint8_t FAN_INT_PIN2 = 2;
+static const uint8_t BUZZER_PIN = 5;
+static const uint8_t RGB_LED_PIN = 6;
+static const uint8_t FAN_INT_PIN1 = 7;
+static const uint8_t HDD_POWER_BUTTON_PIN = 8;
 static const uint8_t FAN_PWM_PIN1 = 9;
 static const uint8_t FAN_PWM_PIN2 = 10;
-static const uint8_t FAN_INT_PIN1 = 7;
-static const uint8_t FAN_INT_PIN2 = 2;
-static const uint8_t ONEWIRE_PIN = 15;
-static const uint8_t HDD_POWER_BUTTON_PIN = 4;
 static const uint8_t DISPLAY_BUTTON_RIGHT_PIN = 14;
+static const uint8_t ONEWIRE_PIN = 15;
 static const uint8_t DISPLAY_BUTTON_LEFT_PIN = 16;
-static const uint8_t RGB_LED_PIN = 6;
-// remaining unused pins are: 3, 5
+// remaining unused pins are: 3, 4
 
 static uint8_t serial_data[64];
 static uint8_t serial_write_offset = 0;
@@ -62,7 +62,7 @@ static const uint16_t CMD_RESET = ('~' << 8) | 'R';
 static const uint16_t CMD_CANCEL_WAIT_STATUS = ('#' << 8) | '0';
 static const uint16_t CMD_PREPARE_FOR_REBOOT = ('#' << 8) | 'R';
 static const uint16_t CMD_PREPARE_FOR_SHUTDOWN = ('#' << 8) | 'S';
-static const uint16_t CMD_ENTER_HYBERNATE_MODE = ('#' << 8) | 'H';
+static const uint16_t CMD_ENTER_HIBERNATE_MODE = ('#' << 8) | 'H';
 static const uint16_t CMD_RGB_LED_COLOR_RESET = ('L' << 8) | 'R';
 static const uint16_t CMD_RGB_LED_COLOR_SET = ('L' << 8) | 'C';
 static const uint16_t CMD_RGB_LED_BREATH_SET = ('L' << 8) | 'B';
@@ -123,8 +123,8 @@ typedef enum {
   DISPLAY_PAGE_TYPE_LOAD_CPU,
   DISPLAY_PAGE_TYPE_LOAD_RAM,
   DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS,
-  DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE,
   DISPLAY_PAGE_TYPE_UPTIME,
+  DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE,
   DISPLAY_PAGE_TYPE__DO_NOT_REMOVE
 } DisplayPageTypes;
 
@@ -200,8 +200,8 @@ struct RgbColor {
 
 struct FanCapture {
   volatile uint16_t rpm_counter;
+  volatile uint8_t capture_buffer_index;
   uint16_t capture_buffer[8];
-  uint8_t capture_buffer_index;
   uint8_t min_duty_cycle;
   uint8_t max_duty_cycle;
   int8_t req_duty_percentage;  // fan speed in 0..100% of PWM between `min_duty_cycle` and `max_duty_cycle` (set negative value to disable fan)
@@ -235,6 +235,9 @@ static const int HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS = 30000;
 // This helps touch/capacitive buttons to stabilize. Can be 0 for physical contact buttons.
 static const int DISPLAY_BUTTON_IGNORE_PERIOD_IN_MILLISECONDS = 5000;
 
+// Button debounce koefficient. One unit is roughly equal to 100ms.
+static const int BUTTON_DEBOUNCER_THRESHOLD = 2;
+
 // Some fixed colours for RGB LEDs
 static const RgbColor RGB_BLACK = { 0, 0, 0 };
 static const RgbColor RGB_WHITE = { 255, 255, 150 };
@@ -248,8 +251,9 @@ static const RgbColor RGB_PURPLE = { 255, 0, 255 };
 
 static bool _use_fahrenheit_temp = false;
 
-static bool _melody_is_playing = false;
-static bool _melody_is_playing_error = false;
+static volatile uint32_t _melody_sound_remaining_cycles = 0;
+static bool _is_melody_quick_playing = false;
+static bool _is_melody_playing_error = false;
 static MelodyNote _melody_notes[16];
 static unsigned long _melody_start_time = 0;
 static int8_t _melody_note_playing_index = 0;
@@ -278,6 +282,7 @@ static uint8_t _lcd_fade_speed_increment = 5;
 static unsigned long _last_lcd_fade_update_time = 0;
 
 static uint8_t _display_page_current = 1;
+static uint8_t _display_page_actual = 0;
 static unsigned long _display_alert_end_time = 0;
 static unsigned long _display_info_end_time = 0;
 static bool _is_showing_alert = false;
@@ -288,16 +293,20 @@ static uint8_t _disk_temperature_alert = 0;
 static uint8_t _disk_shutdown_delay_in_seconds = 0;
 static unsigned long _disk_shutdown_delay_end_time = 0;
 
-static bool _disk_power_state = false;
 static unsigned long _disk_power_last_toggle = 0;
 static uint8_t _disk_power_button_debouncer = 0;
+static bool _is_disk_voltage_on = false;
+static bool _was_disk_voltage_on = false;
+static bool ___fake_disk_voltage_on = false;
 static float _disk_voltage_12v = 0;
-static float _disk_voltage_12v_kf = 15.0 / 1023.0;
+static float _disk_voltage_12v_kf = 15.0F / 1024.0F;
 static float _disk_voltage_5v = 0;
-static float _disk_voltage_5v_kf = 8.0 / 1023.0;
+static float _disk_voltage_5v_kf = 8.0F / 1024.0F;
 
 static uint8_t _display_button_right_debouncer = 0;
 static uint8_t _display_button_left_debouncer = 0;
+static bool _is_display_button_active_on_release = false;
+static unsigned long _display_button_both_pressed_detected_time = 0;
 static unsigned long _display_button_screen_page_hold_end_time = 0;
 
 static bool _was_usb_suspended = false;
@@ -329,14 +338,27 @@ void setup() {
   wdt_disable();
   wdt_enable(WDTO_2S);
 
+  // Configure pin for buzzer
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
   // Configure pins for buttons
   pinMode(HDD_POWER_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(DISPLAY_BUTTON_RIGHT_PIN, INPUT_PULLUP);
   pinMode(DISPLAY_BUTTON_LEFT_PIN, INPUT_PULLUP);
+  pinMode(DISPLAY_BUTTON_RIGHT_PIN, INPUT_PULLUP);
 
   // Configure pin for RGB LED
   pinMode(RGB_LED_PIN, OUTPUT);
   digitalWrite(RGB_LED_PIN, LOW);
+
+  // Beep on power up
+  tone_pwm(800, 200);
+
+  // Configure ADC
+  adc_init();
+
+  // Start sampling 12V rail
+  adc_sampling_start(ADC_PIN_12V);
 
   exit_sleep_mode();
   change_wait_status(WAIT_STATUS_BOOT_PHASE1);
@@ -351,23 +373,21 @@ void setup() {
   init_display_pages();
   init_external_stats();
 
-  // Beep on power up
-  tone(BUZZER_PIN, 800, 200);
+  //Check 12v/5v power supply to HDD on reset, and if it's already ON then skip the power button check
+  for (uint8_t i = 0; i < 20; i++) {
+    adc_sampling_start(ADC_PIN_12V);
+    delay(1);
+    process_hdd_voltage_check();
 
-  // ADC reference voltage
-  analogReference(INTERNAL);
-
-  // TODO: Check 12v/5v power supply to HDD on reset, and if it's already ON then skip the power button check
-  // and also set `_disk_power_state` to reflect current state
-  for (uint8_t i = 0; i < 100; i++) {
-    if (_disk_power_state) {
+    if (_is_disk_voltage_on) {
       break;
     }
 
-    process_hdd_power_button(i);
-    delay(1);
+    process_hdd_power_button();
     wdt_reset();
   }
+
+  _disk_power_last_toggle = 0;
 
   // Synchronously fade in LCD brightness
   for (uint8_t i = 0; i < (_lcd_brightness_target / _lcd_fade_speed_increment) + 1; i++) {
@@ -384,14 +404,9 @@ void setup() {
   pinMode(LED_BUILTIN_RX, INPUT);
 
   temp_sensors_enable();
-
   fan_pin_interrupt_enable();
-  interrupts();
 
-  // Beep again if HDD power was enabled at startup
-  if (_disk_power_state) {
-    tone(BUZZER_PIN, 800, 200);
-  }
+  interrupts();
 
   wdt_reset();
   wdt_enable(WDTO_500MS);
@@ -424,7 +439,15 @@ void loop() {
   }
 
   // *** HIGH PRIORITY CODE STARTS HERE ***
-  process_hdd_power_button(elapsed_time);
+  melody_play();
+
+  // Don't run any lower priority code when melody is playing, as it upsets duration timings
+  if (_is_melody_quick_playing) {
+    return;
+  }
+
+  process_hdd_voltage_check();
+  process_hdd_power_button();
 
   if (elapsed_time > DISPLAY_BUTTON_IGNORE_PERIOD_IN_MILLISECONDS) {
     process_display_button();
@@ -439,8 +462,6 @@ void loop() {
     _last_lcd_fade_update_time = elapsed_time;
   }
 
-  melody_play();
-
   if (_is_showing_alert != _was_showing_alert) {
     _was_showing_alert = _is_showing_alert;
 
@@ -452,11 +473,6 @@ void loop() {
   }
 
   rgb_led_update(elapsed_time);
-
-  // Don't run any lower priority code when melody is playing, as it upsets duration timings
-  if (_melody_is_playing) {
-    return;
-  }
 
   // *** LESS PRIORITY CODE STARTS HERE ***
   const unsigned long elapsed_time_since_1o4_second_check = elapsed_time - _last_check_time_1o4_second;
@@ -471,9 +487,6 @@ void loop() {
   // Every 1 second updates
   if (_last_check_time_1o4_second_counter % 4) {
     fan_pwm_apply_updated_values();
-
-    _disk_voltage_12v = (float)analogRead(ADC_PIN_12V) * _disk_voltage_12v_kf;
-    _disk_voltage_5v = (float)analogRead(ADC_PIN_5V) * _disk_voltage_5v_kf;
 
     if (!_is_showing_alert && !_is_showing_info) {
       if (_wait_status != WAIT_STATUS_READY) {
@@ -535,7 +548,7 @@ void check_for_alerts() {
     if (disk_number) {
       char line2[] = "HDD #0 TOO HOT";
       line2[5] = '0' + disk_number;
-      display_alert("*** ALERT! ***", "line2");
+      display_alert("*** ALERT! ***", line2);
     }
   }
 }
@@ -585,7 +598,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     return 0;
   }
 
-  if (cmd == CMD_ENTER_HYBERNATE_MODE) {
+  if (cmd == CMD_ENTER_HIBERNATE_MODE) {
     enter_sleep_mode();
     return 0;
   }
@@ -636,7 +649,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
   TokenChunk token_chunks[16];
   uint8_t token_chunks_count = 0;
-  const uint8_t chars_count = extract_int_tokens(payload, payload_length, token_chunks, &token_chunks_count);
+  const uint8_t chars_count = extract_uint16_tokens(payload, payload_length, token_chunks, &token_chunks_count);
 
   if (token_chunks_count == 0) {
     return ERR_NO_COMMAND_PARAMETERS;
@@ -1048,7 +1061,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
   return ERR_UNKNOWN_COMMAND;
 }
 
-uint8_t extract_int_tokens(const char payload[], const uint8_t payload_length, const TokenChunk token_chunks[], uint8_t *token_chunks_count) {
+uint8_t extract_uint16_tokens(const char payload[], const uint8_t payload_length, const TokenChunk token_chunks[], uint8_t *token_chunks_count) {
   uint8_t tcc = 0;
   uint8_t i = 0;
   while (i < payload_length) {
@@ -1056,7 +1069,7 @@ uint8_t extract_int_tokens(const char payload[], const uint8_t payload_length, c
       break;
     }
 
-    const uint8_t chars_count = parse_int_array(&payload[i], token_chunks[tcc].tokens, &token_chunks[tcc].count);
+    const uint8_t chars_count = parse_uint16_array(&payload[i], sizeof(token_chunks[0].tokens) / sizeof(token_chunks[0].tokens[0]), token_chunks[tcc].tokens, &token_chunks[tcc].count);
     if (chars_count) {
       tcc++;
       i += chars_count;
@@ -1076,12 +1089,16 @@ uint8_t extract_int_tokens(const char payload[], const uint8_t payload_length, c
   return i;
 }
 
-uint8_t parse_int_array(const char *p, const uint16_t *values, uint8_t *count) {
+uint8_t parse_uint16_array(const char *p, const uint8_t max_tokens, const uint16_t *values, uint8_t *count) {
   uint8_t chars_count = 0;
   uint8_t token_count = 0;
 
   while (true) {
-    const uint8_t len = parse_int(p, &values[token_count]);
+    if (token_count >= max_tokens) {
+      break;
+    }
+
+    const uint8_t len = parse_uint16_t(p, &values[token_count]);
     if (!len) {
       break;
     }
@@ -1103,7 +1120,7 @@ uint8_t parse_int_array(const char *p, const uint16_t *values, uint8_t *count) {
   return chars_count;
 }
 
-uint8_t parse_int(const char *p, uint16_t *value) {
+uint8_t parse_uint16_t(const char *p, uint16_t *value) {
   uint16_t result = 0;
   uint8_t chars_count = 0;
   *value = 0xffff;
@@ -1118,7 +1135,7 @@ uint8_t parse_int(const char *p, uint16_t *value) {
 }
 
 void write_to_page (const uint8_t page_index, const uint8_t payload[], const uint8_t payload_length) {
-  if (!display_page_texts[page_index]) {
+  if (display_page_texts[page_index] == NULL) {
     display_page_texts[page_index] = malloc(DISPLAY_WIDTH * DISPLAY_HEIGHT);
   }
 
@@ -1196,6 +1213,13 @@ void fan_pwm_apply_updated_values() {
 }
 
 void pwm_start(uint32_t freq, uint8_t duty1, uint8_t duty2) {
+  const uint16_t counter_prescaler = 8;
+
+  if (freq <= ((F_CPU / 65535 / counter_prescaler) - 1)) {
+    pwm_stop();
+    return;
+  }
+
   // Set digital pin 9 (D9) to an output
   pinMode(FAN_PWM_PIN1, OUTPUT);
 
@@ -1220,11 +1244,10 @@ void pwm_start(uint32_t freq, uint8_t duty1, uint8_t duty2) {
   //  0    1    0 ..   /8 =  30.52Hz upto 1MHz
   //  0    1    1 ..  /64 =   3.81Hz upto 125,000kHz
   //  1    0    0 .. /256 =   0.95Hz upto  31,250kHz
-  // Set prescaler to 256
+  // Set prescaler to 8
   TCCR1B |= ((1 << CS11));
   TCCR1B &= ~((1 << CS12) | (1 << CS10));
 
-  const uint16_t counter_prescaler = 8;
   uint16_t counter_overflow = (F_CPU / freq / counter_prescaler) - 1;
 
   // Set base frequency (identical for both D9 and D10)
@@ -1321,14 +1344,16 @@ void fans_rpm_update() {
 uint16_t calculate_fan_rpm(FanCapture &fan) {
   const uint8_t capture_buffer_size = sizeof(fan.capture_buffer) / sizeof(fan.capture_buffer[0]);
   uint32_t rpm_sum = 0;
+  uint8_t capture_count = 0;
 
   for (uint8_t capture_buffer_index = 0; capture_buffer_index < capture_buffer_size - 1; capture_buffer_index++) {
     if (fan.capture_buffer[capture_buffer_index + 1] >= fan.capture_buffer[capture_buffer_index]) {
       rpm_sum += fan.capture_buffer[capture_buffer_index + 1] - fan.capture_buffer[capture_buffer_index];
+      capture_count++;
     }
   }
 
-  const float avg_rpm = rpm_sum / (float)capture_buffer_size;
+  const float avg_rpm = rpm_sum / (float)capture_count;
 
   // 2 pulses per revolution
   const float rpm = avg_rpm * FAN_RPM_CAPTURES_PER_SECOND * (60.0F / 2.0F);
@@ -1384,60 +1409,123 @@ void temp_sensors_update() {
   }
 }
 
-void process_hdd_power_button(unsigned long elapsed_time) {
-  if (!debounce_button(HDD_POWER_BUTTON_PIN, LOW, &_disk_power_button_debouncer)) {
+void process_hdd_power_button() {
+  const uint8_t hdd_power_button_state = digitalRead(HDD_POWER_BUTTON_PIN);
+  if (!debounce_button(hdd_power_button_state, LOW, false, _disk_power_button_debouncer)) {
     return;
   }
 
-  if (_disk_power_last_toggle > 0) {
-    const unsigned long ms_since_last_toggle = elapsed_time - _disk_power_last_toggle;
-    if (ms_since_last_toggle < 500) {
-      return;
-    }
-
-    if (ms_since_last_toggle < HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS - 1000) {
-      const uint16_t seconds_left = (HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS - ms_since_last_toggle) / 1000;
-      char line[] = "wait     sec. to";
-      itoar(seconds_left, &line[7]);
-      display_message(line, "toggle HDD power");
-      const MelodyNote play_notes[] = { { 300, 50 }, { 600, 50 }, { 300, 50 } };
-      melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
-      return;
-    }
+  if (hdd_check_can_toggle_power()) {
+    hdd_toggle_power();
   }
-
-  if (!_disk_power_state) {
-    display_message("HDD power ON", "\xFF\xFF");
-    _disk_power_state = true;
-  } else {
-    display_message("HDD power OFF", "\x01\x05");
-    _disk_power_state = false;
-  }
-
-  const MelodyNote play_notes[] = { { 1200, 25 } };
-  melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
-
-  _disk_power_last_toggle = elapsed_time;
 }
 
 void process_display_button() {
-  const bool is_right_button_pressed = debounce_button(DISPLAY_BUTTON_RIGHT_PIN, LOW, &_display_button_right_debouncer);
-  const bool is_left_button_pressed = debounce_button(DISPLAY_BUTTON_LEFT_PIN, LOW, &_display_button_left_debouncer);
+  const uint8_t left_button_state = digitalRead(DISPLAY_BUTTON_LEFT_PIN);
+  const uint8_t right_button_state = digitalRead(DISPLAY_BUTTON_RIGHT_PIN);
 
-  if (!is_right_button_pressed && !is_left_button_pressed) {
+  if (left_button_state == LOW && right_button_state == LOW) {
+    const unsigned long elapsed_time = millis();
+
+    const uint8_t seconds_both_buttons_pressed = (elapsed_time - _display_button_both_pressed_detected_time) / 1024;
+
+    if (_display_page_actual == DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE) {
+      if (_display_button_both_pressed_detected_time == 0) {
+        if (!hdd_check_can_toggle_power()) {
+          // Roll back double press detected time to always produce large difference and avoid repeated trigger
+          _display_button_both_pressed_detected_time = elapsed_time - 10000;
+          return;
+        }
+
+        _display_button_both_pressed_detected_time = elapsed_time;
+        display_message("Hold for 3 sec", _is_disk_voltage_on ? "to STOP HDDs" : "to start HDD");
+        play_ack_sound();
+        return;
+      }
+
+      if (seconds_both_buttons_pressed >= 4) {
+        return;
+      }
+
+      if (seconds_both_buttons_pressed >= 3) {
+        // Roll back double press detected time to always produce large difference and avoid repeated trigger
+        _display_button_both_pressed_detected_time = elapsed_time - 10000;
+        
+        if (hdd_check_can_toggle_power()) {
+          hdd_toggle_power();
+        }
+
+        return;
+      }
+
+      if (seconds_both_buttons_pressed >= 2) {
+        display_message("Almost there", "...");
+        return;
+      }
+
+      if (seconds_both_buttons_pressed >= 1) {
+        display_message("Keep holding", "for a bit more");
+        return;
+      }
+
+      return;
+    }
+
+    if (_display_button_both_pressed_detected_time == 0) {
+      _display_button_both_pressed_detected_time = elapsed_time;
+      display_message("Both buttons", "pressed!");
+      play_invalid_op_sound();
+      return;
+    }
+
+    if ((seconds_both_buttons_pressed % 2) == 1) {
+      display_message("Stop holding", "buttons!");
+      play_invalid_op_sound();
+      return;
+    }
+
     return;
   }
 
-  if (_wait_status == WAIT_STATUS_SLEEP) {
-    const MelodyNote play_notes[] = { { 300, 50 }, { 600, 50 }, { 300, 50 } };
-    melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
+  if (_display_button_both_pressed_detected_time > 0) {
+    _display_button_left_debouncer = 0;
+    _display_button_right_debouncer = 0;
+
+    if (left_button_state == LOW || right_button_state == LOW) {
+      return;
+    }
+
+    _display_button_both_pressed_detected_time = 0;
     return;
   }
 
-  const MelodyNote play_notes[] = { { 1200, 25 } };
-  melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
+  const bool is_on_page_with_two_buttons_option = (_display_page_actual == DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE);
+  if (is_on_page_with_two_buttons_option) {
+    if (!_is_display_button_active_on_release && left_button_state != LOW && right_button_state != LOW) {
+      _is_display_button_active_on_release = true;
+      _display_button_left_debouncer = 0;
+      _display_button_right_debouncer = 0;
+      return;
+    }
+  } else {
+    _is_display_button_active_on_release = false;
+  }
 
-  uint8_t logical_page_index = 0;
+  const bool is_left_button_pressed = debounce_button(left_button_state, LOW, _is_display_button_active_on_release, _display_button_left_debouncer);
+  const bool is_right_button_pressed = debounce_button(right_button_state, LOW, _is_display_button_active_on_release, _display_button_right_debouncer);
+
+  if (!is_left_button_pressed && !is_right_button_pressed) {
+    return;
+  }
+
+  if (_wait_status != WAIT_STATUS_READY) {
+    play_invalid_op_sound();
+    return;
+  }
+
+  play_ack_sound();
+
+  int8_t logical_page_index = 0;
 
   const uint8_t page_map_length = sizeof(display_page_map) / sizeof(display_page_map[0]);
   for (uint8_t i = 0; i < page_map_length; i++) {
@@ -1447,11 +1535,15 @@ void process_display_button() {
     }
   }
 
-  if (is_right_button_pressed) {
-    logical_page_index++;
-  } else if (is_left_button_pressed) {
-    logical_page_index--;
+  int8_t scan_incrementor = 0;
+
+  if (is_left_button_pressed) {
+    scan_incrementor = -1;
+  } else if (is_right_button_pressed) {
+    scan_incrementor = +1;
   }
+
+  logical_page_index += scan_incrementor;
 
   for (uint8_t i = 0; i < 10; i++) {
     if (logical_page_index >= page_map_length) {
@@ -1459,6 +1551,11 @@ void process_display_button() {
       continue;
     }
     
+    if (logical_page_index <= 0) {
+      logical_page_index = page_map_length - 1;
+      continue;
+    }
+
     uint8_t physical_page_index = display_page_map[logical_page_index];
     if (physical_page_index >= DISPLAY_PAGE_TYPE__DO_NOT_REMOVE) {
       logical_page_index = 1;
@@ -1466,12 +1563,12 @@ void process_display_button() {
     }
 
     if (physical_page_index == 0) {
-      logical_page_index++;
+      logical_page_index += scan_incrementor;
       continue;
     }
 
     if (physical_page_index <= DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST && !display_page_texts[physical_page_index]) {
-      logical_page_index++;
+      logical_page_index += scan_incrementor;
       continue;
     }
 
@@ -1483,34 +1580,37 @@ void process_display_button() {
   display_page(_display_page_current);
 }
 
-bool debounce_button(const uint8_t button_pin, const uint8_t expected_active_state, uint8_t * debouncer) {
-  static const int button_debouncer_threshold = 5;
-  
-  const uint8_t button_state = digitalRead(button_pin);
+bool debounce_button(const uint8_t button_state, const uint8_t expected_active_state, const bool active_on_release, uint8_t &debouncer) {
   if (button_state != expected_active_state) {
-    (*debouncer) = 0;
+    // Special behaviour if we need activation on release
+    if (active_on_release && debouncer == 0xFF) {
+      debouncer = 0;
+      return true;
+    }
+
+    debouncer = 0;
     return false;
   }
 
   // Check if button press was already detected and now wait for button release 
-  if ((*debouncer) > button_debouncer_threshold) {
+  if (debouncer > BUTTON_DEBOUNCER_THRESHOLD) {
     return false;
   }
 
   // Wait some time for button to be pressed to suppress contact bouncing
-  if ((*debouncer) < button_debouncer_threshold) {
-    (*debouncer)++;
+  if (debouncer < BUTTON_DEBOUNCER_THRESHOLD) {
+    debouncer++;
     return false;
   }
 
   // Indicate that button press was detected
-  (*debouncer) = 0xFF;
+  debouncer = 0xFF;
 
-  return true;
+  return active_on_release ? false : true;
 }
 
 void melody_play(MelodyNote *melody_notes, uint8_t count) {
-  if (_melody_is_playing_error) {
+  if (_is_melody_playing_error) {
     return;
   }
 
@@ -1546,11 +1646,11 @@ void melody_play() {
     }
 
     if (_melody_notes[i].length == 0) {
-      noTone(BUZZER_PIN);
+      noTone_pwm();
       _melody_start_time = 0;
       _melody_note_playing_index = -1;
-      _melody_is_playing = false;
-      _melody_is_playing_error = false;
+      _is_melody_quick_playing = false;
+      _is_melody_playing_error = false;
       return;
     }
 
@@ -1558,19 +1658,13 @@ void melody_play() {
     if (play_time >= prev_note_end_play_time) {
       if (i == 0 && _melody_note_playing_index < 0) {
         _melody_start_time = millis();
-        _melody_is_playing = true;
         play_time = 0;
       }
 
       if (i > _melody_note_playing_index) {
-        const uint16_t frequency = _melody_notes[i].frequency;
-        if (frequency > 10) {
-          tone(BUZZER_PIN, _melody_notes[i].frequency, _melody_notes[i].length);
-        } else {
-          noTone(BUZZER_PIN);
-        }
-
+        tone_pwm(_melody_notes[i].frequency, _melody_notes[i].length);
         _melody_note_playing_index = i;
+        _is_melody_quick_playing = _melody_notes[i].length < 40;
       } else {
         prev_note_end_play_time = this_note_end_play_time;
         continue;
@@ -1584,45 +1678,61 @@ void melody_play() {
 }
 
 void play_error_sound(int8_t error_code) {
-  const uint16_t none_delay = 100;
-  const uint16_t some_delay = 250;
+  const uint16_t none_delay = 50;
+  const uint16_t some_delay = 100;
+  const uint16_t long_delay = 250;
   const uint16_t beep_delay = 100;
   const uint16_t beep_freq = 1200;
+  const uint16_t boop_freq = 800;
 
   switch (error_code) {
     case ERR_UNKNOWN_COMMAND:
       {
-        const MelodyNote play_notes[] = { { 1200, 50 }, { 800, 50 }, { 0, some_delay }, { beep_freq, beep_delay } };
+        const MelodyNote play_notes[] = { { beep_freq, none_delay }, { boop_freq, none_delay }, { 0, long_delay }, { beep_freq, beep_delay } };
         melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
         break;
       }
     case ERR_NO_COMMAND_PARAMETERS:
       {
-        const MelodyNote play_notes[] = { { 1200, 50 }, { 800, 50 }, { 0, some_delay }, { beep_freq, beep_delay }, { 0, none_delay }, { beep_freq, beep_delay } };
+        const MelodyNote play_notes[] = { { beep_freq, none_delay }, { boop_freq, none_delay }, { 0, long_delay }, { beep_freq, beep_delay }, { 0, some_delay }, { beep_freq, beep_delay } };
         melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
         break;
       }
     case ERR_INVALID_PARAMETERS:
       {
-        const MelodyNote play_notes[] = { { 1200, 50 }, { 800, 50 }, { 0, some_delay }, { beep_freq, beep_delay }, { 0, none_delay }, { beep_freq, beep_delay }, { 0, none_delay }, { beep_freq, beep_delay } };
+        const MelodyNote play_notes[] = { { beep_freq, none_delay }, { boop_freq, none_delay }, { 0, long_delay }, { beep_freq, beep_delay }, { 0, some_delay }, { beep_freq, beep_delay }, { 0, some_delay }, { beep_freq, beep_delay } };
         melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
         break;
       }
     default:
       {
-        const MelodyNote play_notes[] = { { 1200, 50 }, { 800, 50 }, { 1200, 50 }, { 800, 50 }, { 1200, 50 }, { 800, 50 } };
+        const MelodyNote play_notes[] = { { beep_freq, none_delay }, { boop_freq, none_delay }, { beep_freq, none_delay }, { boop_freq, none_delay }, { beep_freq, none_delay }, { boop_freq, none_delay } };
         melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
         break;
       }
   }
 
-  _melody_is_playing_error = true;
+  _is_melody_playing_error = true;
+}
+
+void play_ack_sound() {
+  const MelodyNote play_notes[] = { { 1200, 25 } };
+  melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
+}
+
+void play_invalid_op_sound() {
+  const MelodyNote play_notes[] = { { 300, 50 }, { 600, 50 }, { 300, 50 } };
+  melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
+  _is_melody_playing_error = true;
 }
 
 void display_page(const uint8_t index) {
   if (_wait_status != WAIT_STATUS_READY || _is_showing_alert || _is_showing_info) {
+    _display_page_actual = 0;
     return;
   }
+
+  _display_page_actual = index;
 
   if (index <= DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST) {
     if (!display_page_texts[index]) {
@@ -1651,8 +1761,8 @@ void display_page(const uint8_t index) {
     case DISPLAY_PAGE_TYPE_LOAD_CPU: display_page_load("CPU load", ext_loads[EXT_LOAD_SENSOR_INDEX_CPU]); return;
     case DISPLAY_PAGE_TYPE_LOAD_RAM: display_page_load("RAM alloc", ext_loads[EXT_LOAD_SENSOR_INDEX_RAM]); return;
     case DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS: display_page_all_disk_loads(); return;
-    case DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE: display_page_hdd_cage_voltage(); return;
     case DISPLAY_PAGE_TYPE_UPTIME: display_page_uptime(); return;
+    case DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE: display_page_hdd_cage_voltage(); return;
     default: return;
   }
 }
@@ -1710,7 +1820,6 @@ void display_page_all_temps() {
 }
 
 void display_page_all_disk_temps() {
-  char line1[] = "HDD1  #2  #3  #4";
   char line2[] = "                ";
 
   const uint8_t number_of_digits = _use_fahrenheit_temp ? 3 : 2;
@@ -1728,7 +1837,7 @@ void display_page_all_disk_temps() {
     write_temperature(&line2[char_offset + 2], ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1], number_of_digits);
   }
 
-  lcd.send_line(0, line1);
+  lcd.send_line(0, "HDD1  #2  #3  #4");
   lcd.send_line(1, line2);
 }
 
@@ -1769,10 +1878,9 @@ void display_page_load(const char *caption, const int8_t percentage) {
 }
 
 void display_page_all_disk_loads() {
-  char line1[] = "HDD1  #2  #3  #4";
   char line2[] = "                ";
 
-  for (uint8_t disk_index = 0; disk_index <= EXT_TEMP_SENSOR_INDEX_HDD_LAST - EXT_TEMP_SENSOR_INDEX_HDD1; disk_index++) {
+  for (uint8_t disk_index = 0; disk_index <= EXT_LOAD_SENSOR_INDEX_HDD_LAST - EXT_LOAD_SENSOR_INDEX_HDD1; disk_index++) {
     const uint8_t char_offset = (disk_index * 4);
     line2[char_offset + 3] = '%';
 
@@ -1785,30 +1893,34 @@ void display_page_all_disk_loads() {
     itoar(ext_loads[disk_index + EXT_LOAD_SENSOR_INDEX_HDD1], &line2[char_offset + 2]);
   }
 
-  lcd.send_line(0, line1);
+  lcd.send_line(0, "HDD1  #2  #3  #4");
   lcd.send_line(1, line2);
 }
 
 void display_page_hdd_cage_voltage() {
-  char line1[] = "HDD cage voltage";
+  if (!_is_disk_voltage_on) {
+    lcd.send_line(0, "HDD switched OFF");
+    lcd.send_line(1, "hold L+R to [ON]");
+    return;
+  }
+
   char line2[] = "12v:00.0  5v:0.0";
 
-  int int_part_12v = (int)_disk_voltage_12v;
+  int8_t int_part_12v = (int8_t)_disk_voltage_12v;
   int dec_part_12v = (int)(((float)_disk_voltage_12v - (float)int_part_12v) * 10.0f);
   itoar(int_part_12v, &line2[5]);
   itoar(dec_part_12v, &line2[7]);
 
-  int int_part_5v = (int)_disk_voltage_5v;
+  int8_t int_part_5v = (int8_t)_disk_voltage_5v;
   int dec_part_5v = (int)(((float)_disk_voltage_5v - (float)int_part_5v) * 10.0f);
   itoar(int_part_5v, &line2[13]);
   itoar(dec_part_5v, &line2[15]);
 
-  lcd.send_line(0, line1);
+  lcd.send_line(0, "HDD cage voltage");
   lcd.send_line(1, line2);
 }
 
 void display_page_uptime() {
-  char line1[] = "  POWER UPTIME  ";
   char line2[] = "00 days 00:00:00";
 
   const unsigned long totalSeconds = millis() / 1000;
@@ -1823,7 +1935,7 @@ void display_page_uptime() {
   itoar(minutes, &line2[12]);
   itoar(seconds, &line2[15]);
 
-  lcd.send_line(0, line1);
+  lcd.send_line(0, "  POWER UPTIME  ");
   lcd.send_line(1, line2);
 }
 
@@ -2073,19 +2185,100 @@ void exit_sleep_mode() {
   fade_in_lcd_backlight();
 }
 
+bool hdd_check_can_toggle_power() {
+  unsigned long elapsed_time = millis();
+
+  if (_disk_power_last_toggle == 0 && elapsed_time < HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS) {
+    return true;
+  }
+
+  const unsigned long ms_since_last_toggle = elapsed_time - _disk_power_last_toggle;
+
+  if (ms_since_last_toggle < 500) {
+    return false;
+  }
+
+  if (ms_since_last_toggle > HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS - 1000) {
+    return true;
+  }
+
+  const uint16_t seconds_left = (HDD_POWER_TOGGLE_COOLING_PERIOD_IN_MILLISECONDS - ms_since_last_toggle) / 1000;
+  char line[] = "wait     sec. to";
+  itoar(seconds_left, &line[7]);
+  display_message(line, "toggle HDD power");
+  play_invalid_op_sound();
+  
+  return false;
+}
+
+void hdd_toggle_power() {
+  _disk_shutdown_delay_end_time = 0;
+  if (_is_disk_voltage_on) {
+    hdd_power_off();
+  } else {
+    hdd_power_on();
+  }
+}
+
 void hdd_power_off() {
-  if (!_disk_shutdown_delay_end_time) {
+  if (_disk_shutdown_delay_end_time > 0) {
     return;
   }
 
   _disk_shutdown_delay_end_time = 0;
 
-  display_message("Powering OFF", "all HDDs now");
-  hdd_power_off_now();
+  hdd_power_apply(false);
 }
 
-void hdd_power_off_now() {
+void hdd_power_on() {
+  if (_disk_shutdown_delay_end_time > 0) {
+    _disk_shutdown_delay_end_time = 0;
+    return;
+  }
+
+  hdd_power_apply(true);
+}
+
+void hdd_power_apply(const bool state) {
+  ___fake_disk_voltage_on = state;
+  _disk_power_last_toggle = millis();
   // TODO: change HDD power pin here
+}
+
+void process_hdd_voltage_check() {
+  float adc_value;
+  const uint8_t adc_channel = adc_sampling_read(adc_value);
+  
+  // Check if sampling not yet completed
+  if (adc_channel == 0) {
+    return;
+  }
+
+  if (adc_channel == ADC_PIN_12V) {
+    _disk_voltage_12v = adc_value;
+    adc_sampling_start(ADC_PIN_5V);
+  } else if (adc_channel == ADC_PIN_5V) {
+    _disk_voltage_5v = adc_value;
+    adc_sampling_start(ADC_PIN_12V);
+  }
+
+  if (___fake_disk_voltage_on || _disk_voltage_12v > 3) {
+    _is_disk_voltage_on = true;
+  } else {
+    _is_disk_voltage_on = false;
+    _disk_voltage_5v = 0;
+  }
+  
+  if (_is_disk_voltage_on != _was_disk_voltage_on) {
+    if (_is_disk_voltage_on) {
+      display_message("HDD cage power", "\xFF\xFF  ON");
+    } else {
+      display_message("HDD cage power", "\x01\x05 OFF");
+    }
+
+    _disk_power_last_toggle = millis();
+    _was_disk_voltage_on = _is_disk_voltage_on;
+  }
 }
 
 void process_wait_status_changes(const unsigned long elapsed_time) {
@@ -2108,7 +2301,7 @@ void process_wait_status_changes(const unsigned long elapsed_time) {
       // reset as on power cycle
       while (1) {}
     } else if (_wait_status == WAIT_STATUS_SHUTDOWN_PHASE1 && toggle_usb_suspended) {
-      hdd_power_off_now();
+      hdd_power_apply(false);
       change_wait_status(WAIT_STATUS_SHUTDOWN_PHASE2);
     } else if (_wait_status == WAIT_STATUS_SLEEP_PHASE1) {
       if (_disk_shutdown_delay_end_time) {
@@ -2655,4 +2848,108 @@ void create_custom_lcd_chars() {
     B00100,
   };
   lcd.createChar(7, char7);
+}
+
+void adc_init() {
+  // Configure ADC control and status
+  ADCSRA = 0;
+
+  // Set internal 2.56V reference with capacitor on AREF pin
+  // REFS1=1, REFS0=1 for internal 2.56V
+  ADMUX = (1 << REFS1) | (1 << REFS0);
+  
+  // Set initial channel
+  ADMUX |= (ADC_PIN_12V & 0x07);
+
+  // Clear MUX5 for ADC below channel 8
+  ADCSRB &= ~(1 << MUX5);
+ 
+  // Set prescaler to 128 (125kHz ADC clock)
+  ADCSRA |= (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+  
+  // Enable ADC
+  ADCSRA |= (1 << ADEN);
+}
+
+void adc_sampling_start(uint8_t channel) {
+  // Set channel
+  ADMUX = (ADMUX & 0xF0) | (channel & 0x0F);
+  
+  // Start conversion
+  ADCSRA |= (1 << ADSC);
+}
+
+uint8_t adc_sampling_read(float &voltage) {
+  // Check if conversion completed
+  if (ADCSRA & (1 << ADSC)) {
+    return 0;
+  }
+
+  // Read result (ADCL first!)
+  const uint16_t raw_value = ADCL | (ADCH << 8);
+  voltage = (raw_value * 2.56F) / 1024.0F;
+
+  // Read channel that was sampled
+  const uint8_t channel = ADMUX & 0x07;
+  return channel;
+}
+
+ISR(TIMER3_OVF_vect) {
+  if (_melody_sound_remaining_cycles == 0) {
+    noTone_pwm();
+    return;
+  }
+  --_melody_sound_remaining_cycles;
+}
+
+void tone_pwm(const uint16_t freq, const uint16_t duration_ms) {
+  if (freq < 10) {
+    noTone_pwm();
+    return;
+  }
+
+  noInterrupts();
+
+  TIMSK3 = 0;
+  TCCR3A = 0;
+  TCCR3B = 0;
+
+  // Fast PWM, Mode 14 (WGM33:0 = 1110), TOP = ICR3
+  TCCR3A |= (1 << WGM31);
+  TCCR3B |= (1 << WGM33) | (1 << WGM32);
+
+  // Clear OC3A on compare match, set at BOTTOM
+  TCCR3A |= (1 << COM3A1);
+
+  // Prescaler = 8
+  TCCR3B |= (1 << CS31);
+
+  const uint16_t top = (F_CPU / (8UL * freq)) - 1;
+  ICR3 = top;
+  OCR3A = top / 2;
+
+  if (duration_ms > 0) {
+    _melody_sound_remaining_cycles = ((uint32_t)freq * (uint32_t)duration_ms) / 1000;
+
+    // Enable overflow interrupt
+    TIMSK3 |= (1 << TOIE3);
+  }
+
+  TCNT3 = 0;
+
+  interrupts();
+}
+
+void noTone_pwm() {
+  digitalWrite(BUZZER_PIN, LOW);
+
+  noInterrupts();
+
+  TIMSK3 = 0;
+  TCCR3A = 0;
+  TCCR3B = 0;
+
+  interrupts();
+
+  _melody_sound_remaining_cycles = 0;
 }
