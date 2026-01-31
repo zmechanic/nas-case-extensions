@@ -84,6 +84,7 @@ static const uint16_t CMD_DISPLAY_BRIGHTNESS = ('D' << 8) | 'B';
 static const uint16_t CMD_TEMPERATURE_SCALE_FAHRENHEIT_SET = ('T' << 8) | 'F';
 static const uint16_t CMD_TEMPERATURE_OFFSET = ('T' << 8) | 'O';
 static const uint16_t CMD_TEMPERATURE_ALERT_ENABLE = ('T' << 8) | 'A';
+static const uint16_t CMD_VOLTAGE_OFFSET = ('V' << 8) | 'O';
 static const uint16_t CMD_EXTERNAL_SENSOR_SET_LOAD = ('E' << 8) | 'L';
 static const uint16_t CMD_EXTERNAL_SENSOR_SET_FANS = ('E' << 8) | 'F';
 static const uint16_t CMD_EXTERNAL_SENSOR_SET_TEMP = ('E' << 8) | 'T';
@@ -243,6 +244,8 @@ static const RgbColor RGB_TURQUOISE = { 0, 255, 128 };
 static const RgbColor RGB_PINK = { 255, 0, 70 };
 static const RgbColor RGB_PURPLE = { 255, 0, 255 };
 
+static const float ADC_REF_VOLTAGE = 2.56F;
+
 static bool _use_fahrenheit_temp = false;
 
 static volatile uint32_t _melody_sound_remaining_cycles = 0;
@@ -294,9 +297,9 @@ static bool _is_disk_voltage_on = false;
 static bool _was_disk_voltage_on = false;
 static bool ___fake_disk_voltage_on = false;
 static float _disk_voltage_12v = 0;
-static float _disk_voltage_12v_kf = 15.0F / 1024.0F;
+static float _disk_voltage_12v_kf = 15.0F / ADC_REF_VOLTAGE;
 static float _disk_voltage_5v = 0;
-static float _disk_voltage_5v_kf = 8.0F / 1024.0F;
+static float _disk_voltage_5v_kf = 8.0F / ADC_REF_VOLTAGE;
 
 static uint8_t _display_button_right_debouncer = 0;
 static uint8_t _display_button_left_debouncer = 0;
@@ -836,7 +839,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
   if (cmd == CMD_FAN_SPEED_SET) {
     for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
       const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-      if (tokens_count <= 1) {
+      if (tokens_count < 2) {
         return ERR_INVALID_PARAMETERS;
       }
 
@@ -857,7 +860,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
   if (cmd == CMD_FAN_PWM_SET) {
     for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
       const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-      if (tokens_count <= 1) {
+      if (tokens_count < 2) {
         return ERR_INVALID_PARAMETERS;
       }
 
@@ -894,7 +897,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
   if (cmd == CMD_FAN_HYSTERESYS_SET) {
     for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
       const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-      if (tokens_count <= 1) {
+      if (tokens_count < 2) {
         return ERR_INVALID_PARAMETERS;
       }
 
@@ -921,7 +924,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
   if (cmd == CMD_FAN_ALERT_ENABLE) {
     for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
       const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-      if (tokens_count <= 1) {
+      if (tokens_count < 2) {
         return ERR_INVALID_PARAMETERS;
       }
 
@@ -950,7 +953,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
   if (cmd == CMD_TEMPERATURE_OFFSET) {
     for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
       const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-      if (tokens_count <= 1) {
+      if (tokens_count < 2) {
         return ERR_INVALID_PARAMETERS;
       }
 
@@ -973,7 +976,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
   if (cmd == CMD_TEMPERATURE_ALERT_ENABLE) {
     for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
       const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-      if (tokens_count <= 1) {
+      if (tokens_count < 2) {
         return ERR_INVALID_PARAMETERS;
       }
 
@@ -993,10 +996,26 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     return chars_count;
   }
 
+  if (cmd == CMD_VOLTAGE_OFFSET) {
+    for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
+      const uint8_t tokens_count = token_chunks[token_chunk_index].count;
+      if (tokens_count < 2) {
+        return ERR_INVALID_PARAMETERS;
+      }
+
+      const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
+
+      _disk_voltage_12v_kf = tokens[0] / (tokens[0] < 20 ? 1.0F : tokens[0] < 200 ? 10.0F : 100.0F) / ADC_REF_VOLTAGE;
+      _disk_voltage_5v_kf = tokens[1] / (tokens[1] < 10 ? 1.0F : tokens[1] < 100 ? 10.0F : 100.0F) / ADC_REF_VOLTAGE;
+    }
+
+    return chars_count;
+  }
+
   if (cmd == CMD_EXTERNAL_SENSOR_SET_LOAD || cmd == CMD_EXTERNAL_SENSOR_SET_FANS || cmd == CMD_EXTERNAL_SENSOR_SET_TEMP) {
     for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
       const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-      if (tokens_count <= 1) {
+      if (tokens_count < 2) {
         return ERR_INVALID_PARAMETERS;
       }
 
@@ -2290,10 +2309,10 @@ void process_hdd_voltage_check() {
   }
 
   if (adc_channel == ADC_PIN_12V) {
-    _disk_voltage_12v = adc_value;
+    _disk_voltage_12v = adc_value * _disk_voltage_12v_kf;
     adc_sampling_start(ADC_PIN_5V);
   } else if (adc_channel == ADC_PIN_5V) {
-    _disk_voltage_5v = adc_value;
+    _disk_voltage_5v = adc_value * _disk_voltage_5v_kf;
     adc_sampling_start(ADC_PIN_12V);
   }
 
@@ -2921,7 +2940,7 @@ uint8_t adc_sampling_read(float &voltage) {
 
   // Read result (ADCL first!)
   const uint16_t raw_value = ADCL | (ADCH << 8);
-  voltage = (raw_value * 2.56F) / 1024.0F;
+  voltage = (raw_value * ADC_REF_VOLTAGE) / 1024.0F;
 
   // Read channel that was sampled
   const uint8_t channel = ADMUX & 0x07;
