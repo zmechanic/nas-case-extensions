@@ -296,9 +296,11 @@ static uint8_t _disk_power_button_debouncer = 0;
 static bool _is_disk_voltage_on = false;
 static bool _was_disk_voltage_on = false;
 static bool ___fake_disk_voltage_on = false;
-static float _disk_voltage_12v = 0;
+static uint8_t _disk_voltage_12v_run[4];
+static uint8_t _disk_voltage_5v_run[4];
+static uint8_t _disk_voltage_12v = 0;
 static float _disk_voltage_12v_kf = 15.0F / ADC_REF_VOLTAGE;
-static float _disk_voltage_5v = 0;
+static uint8_t _disk_voltage_5v = 0;
 static float _disk_voltage_5v_kf = 8.0F / ADC_REF_VOLTAGE;
 
 static uint8_t _display_button_right_debouncer = 0;
@@ -1930,13 +1932,13 @@ void display_page_hdd_cage_voltage() {
 
   char line2[] = "12v:00.0  5v:0.0";
 
-  int8_t int_part_12v = (int8_t)_disk_voltage_12v;
-  int dec_part_12v = (int)(((float)_disk_voltage_12v - (float)int_part_12v) * 10.0f);
+  uint8_t int_part_12v = _disk_voltage_12v / 10;
+  uint8_t dec_part_12v = _disk_voltage_12v - (int_part_12v * 10);
   itoar(int_part_12v, &line2[5]);
   itoar(dec_part_12v, &line2[7]);
 
-  int8_t int_part_5v = (int8_t)_disk_voltage_5v;
-  int dec_part_5v = (int)(((float)_disk_voltage_5v - (float)int_part_5v) * 10.0f);
+  uint8_t int_part_5v = _disk_voltage_5v / 10;
+  uint8_t dec_part_5v = _disk_voltage_5v - (int_part_5v * 10);
   itoar(int_part_5v, &line2[13]);
   itoar(dec_part_5v, &line2[15]);
 
@@ -2300,8 +2302,8 @@ void hdd_power_apply(const bool state) {
 }
 
 void process_hdd_voltage_check() {
-  float adc_value;
-  const uint8_t adc_channel = adc_sampling_read(adc_value);
+  uint16_t adc_value;
+  const uint8_t adc_channel = adc_sampling_read_raw(adc_value);
   
   // Check if sampling not yet completed
   if (adc_channel == 0) {
@@ -2309,14 +2311,16 @@ void process_hdd_voltage_check() {
   }
 
   if (adc_channel == ADC_PIN_12V) {
-    _disk_voltage_12v = adc_value * _disk_voltage_12v_kf;
+    const float v = ((adc_value * ADC_REF_VOLTAGE) / 102.4F) * _disk_voltage_12v_kf;
+    _disk_voltage_12v = roll_and_average(_disk_voltage_12v_run, sizeof(_disk_voltage_12v_run) / sizeof(_disk_voltage_12v_run[0]), v);
     adc_sampling_start(ADC_PIN_5V);
   } else if (adc_channel == ADC_PIN_5V) {
-    _disk_voltage_5v = adc_value * _disk_voltage_5v_kf;
+    const float v = ((adc_value * ADC_REF_VOLTAGE) / 102.4F) * _disk_voltage_5v_kf;
+    _disk_voltage_5v = roll_and_average(_disk_voltage_5v_run, sizeof(_disk_voltage_5v_run) / sizeof(_disk_voltage_5v_run[0]), v);
     adc_sampling_start(ADC_PIN_12V);
   }
 
-  if (___fake_disk_voltage_on || _disk_voltage_12v > 3) {
+  if (___fake_disk_voltage_on || _disk_voltage_12v > 50) {
     _is_disk_voltage_on = true;
   } else {
     _is_disk_voltage_on = false;
@@ -2332,6 +2336,16 @@ void process_hdd_voltage_check() {
       melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
     }
   }
+}
+
+uint8_t roll_and_average(uint8_t * run, const uint8_t run_len, const uint8_t v) {
+  uint32_t run_acc = run[0];
+  for (uint8_t i = 1; i < run_len; i++) {
+    run_acc += run[i - 1];
+    run[i - 1] = run[i];
+  }
+  run[run_len - 1] = v;
+  return run_acc / run_len;
 }
 
 void process_wait_status_changes(const unsigned long elapsed_time) {
@@ -2932,15 +2946,14 @@ void adc_sampling_start(uint8_t channel) {
   ADCSRA |= (1 << ADSC);
 }
 
-uint8_t adc_sampling_read(float &voltage) {
+uint8_t adc_sampling_read_raw(uint16_t &raw_value) {
   // Check if conversion completed
   if (ADCSRA & (1 << ADSC)) {
     return 0;
   }
 
   // Read result (ADCL first!)
-  const uint16_t raw_value = ADCL | (ADCH << 8);
-  voltage = (raw_value * ADC_REF_VOLTAGE) / 1024.0F;
+  raw_value = ADCL | (ADCH << 8);
 
   // Read channel that was sampled
   const uint8_t channel = ADMUX & 0x07;
