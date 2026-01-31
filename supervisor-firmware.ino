@@ -114,14 +114,16 @@ typedef enum {
   DISPLAY_PAGE_TYPE_CUSTOM_PAGE_3,
   DISPLAY_PAGE_TYPE_CUSTOM_PAGE_4,
   DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST,
-  DISPLAY_PAGE_TYPE_COOLING_HDD,
-  DISPLAY_PAGE_TYPE_COOLING_LSI,
   DISPLAY_PAGE_TYPE_COOLING_CPU,
   DISPLAY_PAGE_TYPE_COOLING_MOTHERBOARD,
+  DISPLAY_PAGE_TYPE_COOLING_HDD,
+  DISPLAY_PAGE_TYPE_COOLING_LSI,
   DISPLAY_PAGE_TYPE_COOLING_ALL,
   DISPLAY_PAGE_TYPE_COOLING_ALL_DISKS,
   DISPLAY_PAGE_TYPE_LOAD_CPU,
   DISPLAY_PAGE_TYPE_LOAD_RAM,
+  DISPLAY_PAGE_TYPE_LOAD_LAN_UPLOAD,
+  DISPLAY_PAGE_TYPE_LOAD_LAN_DOWNLOAD,
   DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS,
   DISPLAY_PAGE_TYPE_UPTIME,
   DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE,
@@ -141,32 +143,24 @@ typedef enum {
 } IntFanSensorIndex;
 
 typedef enum {
-  EXT_TEMP_SENSOR_INDEX_CPU = 0,
-  EXT_TEMP_SENSOR_INDEX_Motherboard,
-  EXT_TEMP_SENSOR_INDEX_HDD1,
-  EXT_TEMP_SENSOR_INDEX_HDD2,
-  EXT_TEMP_SENSOR_INDEX_HDD3,
-  EXT_TEMP_SENSOR_INDEX_HDD4,
-  EXT_TEMP_SENSOR_INDEX_HDD_LAST = EXT_TEMP_SENSOR_INDEX_HDD4,
-  EXT_TEMP_SENSOR_INDEX__DO_NOT_REMOVE
-} ExtTempSensorIndex;
+  EXT_SENSOR_INDEX_CPU = 0,
+  EXT_SENSOR_INDEX_RAM,
+  EXT_SENSOR_INDEX_LAN_UPLOAD,
+  EXT_SENSOR_INDEX_LAN_DOWNLOAD,
+  EXT_SENSOR_INDEX_MOTHERBOARD,
+  EXT_SENSOR_INDEX_HDD1,
+  EXT_SENSOR_INDEX_HDD2,
+  EXT_SENSOR_INDEX_HDD3,
+  EXT_SENSOR_INDEX_HDD4,
+  EXT_SENSOR_INDEX_HDD_LAST = EXT_SENSOR_INDEX_HDD4,
+  EXT_SENSOR_INDEX__DO_NOT_REMOVE
+} ExtSensorIndex;
 
 typedef enum {
   EXT_FAN_SENSOR_INDEX_CPU = 0,
-  EXT_FAN_SENSOR_INDEX_Motherboard,
+  EXT_FAN_SENSOR_INDEX_MOTHERBOARD,
   EXT_FAN_SENSOR_INDEX__DO_NOT_REMOVE
 } ExtFanSensorIndex;
-
-typedef enum {
-  EXT_LOAD_SENSOR_INDEX_CPU = 0,
-  EXT_LOAD_SENSOR_INDEX_RAM,
-  EXT_LOAD_SENSOR_INDEX_HDD1,
-  EXT_LOAD_SENSOR_INDEX_HDD2,
-  EXT_LOAD_SENSOR_INDEX_HDD3,
-  EXT_LOAD_SENSOR_INDEX_HDD4,
-  EXT_LOAD_SENSOR_INDEX_HDD_LAST = EXT_LOAD_SENSOR_INDEX_HDD4,
-  EXT_LOAD_SENSOR_INDEX__DO_NOT_REMOVE
-} ExtLoadSensorIndex;
 
 typedef enum {
   RGB_LED_USER_MODE_NONE = 0,
@@ -287,6 +281,7 @@ static unsigned long _display_alert_end_time = 0;
 static unsigned long _display_info_end_time = 0;
 static bool _is_showing_alert = false;
 static bool _is_showing_info = false;
+static uint32_t _last_displayed_text_crc = 0;
 
 static bool _disk_temperature_to_fan_speed_link_enabled = false;
 static uint8_t _disk_temperature_alert = 0;
@@ -321,8 +316,8 @@ static int8_t _was_array_started_led_code = SENSOR_NOT_PRESENT;
 static FanCapture fans[INT_FAN_SENSOR_INDEX__DO_NOT_REMOVE];
 static TempCapture temps[INT_TEMP_SENSOR_INDEX__DO_NOT_REMOVE];
 static int16_t ext_fans[EXT_FAN_SENSOR_INDEX__DO_NOT_REMOVE];
-static int8_t ext_temps[EXT_TEMP_SENSOR_INDEX__DO_NOT_REMOVE];
-static int8_t ext_loads[EXT_LOAD_SENSOR_INDEX__DO_NOT_REMOVE];
+static int8_t ext_temps[EXT_SENSOR_INDEX__DO_NOT_REMOVE];
+static int8_t ext_loads[EXT_SENSOR_INDEX__DO_NOT_REMOVE];
 
 static char *display_page_texts[DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST + 1];
 static uint8_t display_page_map[DISPLAY_PAGE_TYPE__DO_NOT_REMOVE];
@@ -535,13 +530,13 @@ void check_for_alerts() {
 
   if (_disk_temperature_alert) {
     uint8_t disk_number= 0;
-    if (ext_temps[EXT_TEMP_SENSOR_INDEX_HDD1] >= _disk_temperature_alert) {
+    if (ext_temps[EXT_SENSOR_INDEX_HDD1] >= _disk_temperature_alert) {
       disk_number = 1;
-    } else if (ext_temps[EXT_TEMP_SENSOR_INDEX_HDD2] >= _disk_temperature_alert) {
+    } else if (ext_temps[EXT_SENSOR_INDEX_HDD2] >= _disk_temperature_alert) {
       disk_number = 2;
-    } else if (ext_temps[EXT_TEMP_SENSOR_INDEX_HDD3] >= _disk_temperature_alert) {
+    } else if (ext_temps[EXT_SENSOR_INDEX_HDD3] >= _disk_temperature_alert) {
       disk_number = 3;
-    } else if (ext_temps[EXT_TEMP_SENSOR_INDEX_HDD4] >= _disk_temperature_alert) {
+    } else if (ext_temps[EXT_SENSOR_INDEX_HDD4] >= _disk_temperature_alert) {
       disk_number = 4;
     }
 
@@ -847,7 +842,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
       static const uint8_t number_of_fans = sizeof(fans)/sizeof(fans[0]);
       const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-      const uint8_t fan_index = tokens[0] > 0 && tokens[0] <= number_of_fans ? tokens[0] - 1 : 0;
+      const uint8_t fan_index = (tokens[0] > 0 && tokens[0] <= number_of_fans) ? tokens[0] - 1 : 0;
       const int8_t target_pwm = tokens[1] > 255 ? -1 : tokens[1] < 100 ? tokens[1] : 100;
 
       fans[fan_index].req_duty_percentage = target_pwm;
@@ -868,7 +863,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
       static const uint8_t number_of_fans = sizeof(fans)/sizeof(fans[0]);
       const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-      const uint8_t fan_index = tokens[0] > 0 && tokens[0] <= number_of_fans ? tokens[0] - 1 : 0;
+      const uint8_t fan_index = (tokens[0] > 0 && tokens[0] <= number_of_fans) ? tokens[0] - 1 : 0;
       const uint8_t min_pwm = tokens[1] < 100 ? tokens[1] * 2.55F : 255;
 
       fans[fan_index].min_duty_cycle = min_pwm;
@@ -932,7 +927,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
       static const uint8_t number_of_fans = sizeof(fans)/sizeof(fans[0]);
       const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-      const uint8_t fan_index = tokens[0] > 0 && tokens[0] <= number_of_fans ? tokens[0] - 1 : 0;
+      const uint8_t fan_index = (tokens[0] > 0 && tokens[0] <= number_of_fans) ? tokens[0] - 1 : 0;
       fans[fan_index].alert_rpm = tokens[1];
       fans[fan_index].alert_trigger = 0;
 
@@ -961,7 +956,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
       const uint8_t max_number_of_sensors = (sizeof(temps) / sizeof(temps[0]));
       const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-      const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
+      const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
 
       if (tokens[1] <= 10) {
         temps[sensor_index].correction = tokens[1];
@@ -984,7 +979,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
       const uint8_t max_number_of_sensors = (sizeof(temps) / sizeof(temps[0]));
       const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-      const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
+      const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
       temps[sensor_index].alert_temp = tokens[1] > 255 ? 0 : tokens[1];
       temps[sensor_index].alert_trigger = 0;
 
@@ -1009,15 +1004,15 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
       if (cmd == CMD_EXTERNAL_SENSOR_SET_LOAD) {
         const uint8_t max_number_of_sensors = (sizeof(ext_loads) / sizeof(ext_loads[0]));
-        const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
+        const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
         ext_loads[sensor_index] = tokens[1] > 255 ? SENSOR_NOT_PRESENT : tokens[1] < 100 ? tokens[1] : 100;
       } else if (cmd == CMD_EXTERNAL_SENSOR_SET_FANS) {
         const uint8_t max_number_of_sensors = (sizeof(ext_fans) / sizeof(ext_fans[0]));
-        const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
+        const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
         ext_fans[sensor_index] = tokens[1] > 8000 ? SENSOR_NOT_PRESENT : tokens[1];
       } else if (cmd == CMD_EXTERNAL_SENSOR_SET_TEMP) {
         const uint8_t max_number_of_sensors = (sizeof(ext_temps) / sizeof(ext_temps[0]));
-        const uint8_t sensor_index = tokens[0] > 0 && tokens[0] <= max_number_of_sensors ? tokens[0] - 1 : 0;
+        const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
         ext_temps[sensor_index] = tokens[1] > 255 ? SENSOR_NOT_PRESENT : tokens[1] < 127 ? tokens[1] : 127;
       }
     }
@@ -1166,9 +1161,9 @@ void fan_pwm_apply_updated_values() {
   uint8_t external_sensor_hdd_temp_max = SENSOR_NOT_PRESENT;
 
   if (_disk_temperature_to_fan_speed_link_enabled) {
-    for (uint8_t disk_index = 0; disk_index <= EXT_TEMP_SENSOR_INDEX_HDD_LAST - EXT_TEMP_SENSOR_INDEX_HDD1; disk_index++) {
-      if (ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1] > external_sensor_hdd_temp_max) {
-        external_sensor_hdd_temp_max = ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1];
+    for (uint8_t disk_index = 0; disk_index <= EXT_SENSOR_INDEX_HDD_LAST - EXT_SENSOR_INDEX_HDD1; disk_index++) {
+      if (ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1] > external_sensor_hdd_temp_max) {
+        external_sensor_hdd_temp_max = ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1];
       }
     }
   }
@@ -1459,12 +1454,16 @@ void process_display_button() {
       }
 
       if (seconds_both_buttons_pressed >= 2) {
-        display_message("Almost there", "...");
+        if (display_message("Almost there", "...")) {
+          play_ack_sound();
+        }
         return;
       }
 
       if (seconds_both_buttons_pressed >= 1) {
-        display_message("Keep holding", "for a bit more");
+        if (display_message("Keep holding", "for a bit more")) {
+          play_ack_sound();
+        }
         return;
       }
 
@@ -1473,14 +1472,16 @@ void process_display_button() {
 
     if (_display_button_both_pressed_detected_time == 0) {
       _display_button_both_pressed_detected_time = elapsed_time;
-      display_message("Both buttons", "pressed!");
-      play_invalid_op_sound();
+      if (display_message("Both buttons", "pressed!")) {
+        play_invalid_op_sound();
+      }
       return;
     }
 
     if ((seconds_both_buttons_pressed % 2) == 1) {
-      display_message("Stop holding", "buttons!");
-      play_invalid_op_sound();
+      if (display_message("Stop holding", "buttons!")) {
+        play_invalid_op_sound();
+      }
       return;
     }
 
@@ -1519,7 +1520,9 @@ void process_display_button() {
   }
 
   if (_wait_status != WAIT_STATUS_READY) {
-    play_invalid_op_sound();
+    if (display_message("System is busy", "please wait...")) {
+      play_invalid_op_sound();
+    }
     return;
   }
 
@@ -1754,12 +1757,14 @@ void display_page(const uint8_t index) {
   switch (index) {
     case DISPLAY_PAGE_TYPE_COOLING_HDD: display_page_sensor("HDD cage cooling", fans[INT_FAN_SENSOR_INDEX_HDD].current_rpm, temps[INT_TEMP_SENSOR_INDEX_HDD].current_temp); return;
     case DISPLAY_PAGE_TYPE_COOLING_LSI: display_page_sensor("LSI card cooling", fans[INT_FAN_SENSOR_INDEX_LSI].current_rpm, temps[INT_TEMP_SENSOR_INDEX_LSI].current_temp); return;
-    case DISPLAY_PAGE_TYPE_COOLING_CPU: display_page_sensor("CPU slot cooling", ext_fans[EXT_FAN_SENSOR_INDEX_CPU], ext_temps[EXT_TEMP_SENSOR_INDEX_CPU]); return;
-    case DISPLAY_PAGE_TYPE_COOLING_MOTHERBOARD: display_page_sensor("Mother/b cooling", ext_fans[EXT_FAN_SENSOR_INDEX_Motherboard], ext_temps[EXT_TEMP_SENSOR_INDEX_Motherboard]); return;
+    case DISPLAY_PAGE_TYPE_COOLING_CPU: display_page_sensor("CPU slot cooling", ext_fans[EXT_FAN_SENSOR_INDEX_CPU], ext_temps[EXT_SENSOR_INDEX_CPU]); return;
+    case DISPLAY_PAGE_TYPE_COOLING_MOTHERBOARD: display_page_sensor("Mother/b cooling", ext_fans[EXT_FAN_SENSOR_INDEX_MOTHERBOARD], ext_temps[EXT_SENSOR_INDEX_MOTHERBOARD]); return;
     case DISPLAY_PAGE_TYPE_COOLING_ALL: display_page_all_temps(); return;
     case DISPLAY_PAGE_TYPE_COOLING_ALL_DISKS: display_page_all_disk_temps(); return;
-    case DISPLAY_PAGE_TYPE_LOAD_CPU: display_page_load("CPU load", ext_loads[EXT_LOAD_SENSOR_INDEX_CPU]); return;
-    case DISPLAY_PAGE_TYPE_LOAD_RAM: display_page_load("RAM alloc", ext_loads[EXT_LOAD_SENSOR_INDEX_RAM]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_CPU: display_page_load("CPU load", ext_loads[EXT_SENSOR_INDEX_CPU]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_RAM: display_page_load("RAM alloc", ext_loads[EXT_SENSOR_INDEX_RAM]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_LAN_UPLOAD: display_page_load("LAN upload", ext_loads[EXT_SENSOR_INDEX_LAN_UPLOAD]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_LAN_DOWNLOAD: display_page_load("LAN dnload", ext_loads[EXT_SENSOR_INDEX_LAN_DOWNLOAD]); return;
     case DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS: display_page_all_disk_loads(); return;
     case DISPLAY_PAGE_TYPE_UPTIME: display_page_uptime(); return;
     case DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE: display_page_hdd_cage_voltage(); return;
@@ -1810,8 +1815,8 @@ void display_page_all_temps() {
 
   const uint8_t number_of_digits = _use_fahrenheit_temp ? 3 : 2;
 
-  write_temperature(&line1[_use_fahrenheit_temp ? 6 : 5], ext_temps[EXT_TEMP_SENSOR_INDEX_CPU], number_of_digits);
-  write_temperature(&line2[_use_fahrenheit_temp ? 6 : 5], ext_temps[EXT_TEMP_SENSOR_INDEX_Motherboard], number_of_digits);
+  write_temperature(&line1[_use_fahrenheit_temp ? 6 : 5], ext_temps[EXT_SENSOR_INDEX_CPU], number_of_digits);
+  write_temperature(&line2[_use_fahrenheit_temp ? 6 : 5], ext_temps[EXT_SENSOR_INDEX_MOTHERBOARD], number_of_digits);
   write_temperature(&line1[14], temps[0].current_temp, number_of_digits);
   write_temperature(&line2[14], temps[1].current_temp, number_of_digits);
 
@@ -1824,17 +1829,17 @@ void display_page_all_disk_temps() {
 
   const uint8_t number_of_digits = _use_fahrenheit_temp ? 3 : 2;
 
-  for (uint8_t disk_index = 0; disk_index <= EXT_TEMP_SENSOR_INDEX_HDD_LAST - EXT_TEMP_SENSOR_INDEX_HDD1; disk_index++) {
+  for (uint8_t disk_index = 0; disk_index <= EXT_SENSOR_INDEX_HDD_LAST - EXT_SENSOR_INDEX_HDD1; disk_index++) {
     const uint8_t char_offset = (disk_index * 4);
     line2[char_offset + 3] = _use_fahrenheit_temp ? '\x07' : '\x06';
 
-    if (ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1] == SENSOR_NOT_PRESENT) {
+    if (ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1] == SENSOR_NOT_PRESENT) {
       line2[char_offset + 1] = '-';
       line2[char_offset + 2] = '-';
       continue;
     }
 
-    write_temperature(&line2[char_offset + 2], ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1], number_of_digits);
+    write_temperature(&line2[char_offset + 2], ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1], number_of_digits);
   }
 
   lcd.send_line(0, "HDD1  #2  #3  #4");
@@ -1880,17 +1885,17 @@ void display_page_load(const char *caption, const int8_t percentage) {
 void display_page_all_disk_loads() {
   char line2[] = "                ";
 
-  for (uint8_t disk_index = 0; disk_index <= EXT_LOAD_SENSOR_INDEX_HDD_LAST - EXT_LOAD_SENSOR_INDEX_HDD1; disk_index++) {
+  for (uint8_t disk_index = 0; disk_index <= EXT_SENSOR_INDEX_HDD_LAST - EXT_SENSOR_INDEX_HDD1; disk_index++) {
     const uint8_t char_offset = (disk_index * 4);
     line2[char_offset + 3] = '%';
 
-    if (ext_temps[disk_index + EXT_LOAD_SENSOR_INDEX_HDD1] == SENSOR_NOT_PRESENT) {
+    if (ext_loads[disk_index + EXT_SENSOR_INDEX_HDD1] == SENSOR_NOT_PRESENT) {
       line2[char_offset + 1] = '-';
       line2[char_offset + 2] = '-';
       continue;
     }
 
-    itoar(ext_loads[disk_index + EXT_LOAD_SENSOR_INDEX_HDD1], &line2[char_offset + 2]);
+    itoar(ext_loads[disk_index + EXT_SENSOR_INDEX_HDD1], &line2[char_offset + 2]);
   }
 
   lcd.send_line(0, "HDD1  #2  #3  #4");
@@ -1939,11 +1944,24 @@ void display_page_uptime() {
   lcd.send_line(1, line2);
 }
 
-void display_alert(const char *s1, const char *s2) {
+bool display_alert(const char *s1, const char *s2) {
+  const unsigned long elapsed_time = millis();
+  if (_display_alert_end_time && _display_alert_end_time > elapsed_time) {
+    uint32_t crc = 0xFFFFFFFF;
+    crc = update_crc32(crc, s1);
+    crc = update_crc32(crc, s2);
+
+    if (crc == _last_displayed_text_crc) {
+      return false;
+    }
+
+    _last_displayed_text_crc = crc;
+  }
+
   display_text_centered(s1, s2);
   _is_showing_alert = true;
-  _is_showing_info = !_is_showing_alert;
-  _display_alert_end_time = millis() + DISPLAY_ALERT_DURATION_IN_MILLISECONDS;
+  _is_showing_info = false;
+  _display_alert_end_time = elapsed_time + DISPLAY_ALERT_DURATION_IN_MILLISECONDS;
 
   // Play alert sound
   const MelodyNote play_notes[] = { { _alert_sound_freq, _alert_sound_duration } };
@@ -1955,13 +1973,30 @@ void display_alert(const char *s1, const char *s2) {
   rgb_color[0].length = blink_period;
   rgb_color[1].length = blink_period;
   rgb_led_set_colors(rgb_color, sizeof(rgb_color) / sizeof(rgb_color[0]), false);
+
+  return true;
 }
 
-void display_message(const char *s1, const char *s2) {
+bool display_message(const char *s1, const char *s2) {
+  const unsigned long elapsed_time = millis();
+  if (_display_info_end_time && _display_info_end_time > elapsed_time) {
+    uint32_t crc = 0xFFFFFFFF;
+    crc = update_crc32(crc, s1);
+    crc = update_crc32(crc, s2);
+
+    if (crc == _last_displayed_text_crc) {
+      return false;
+    }
+
+    _last_displayed_text_crc = crc;
+  }
+
   display_text_centered(s1, s2);
   _is_showing_info = true;
-  _is_showing_alert = !_is_showing_info;
-  _display_info_end_time = millis() + DISPLAY_INFO_DURATION_IN_MILLISECONDS;
+  _is_showing_alert = false;
+  _display_info_end_time = elapsed_time + DISPLAY_INFO_DURATION_IN_MILLISECONDS;
+
+  return true;
 }
 
 void display_text_centered(const char *s1, const char *s2) {
@@ -1990,7 +2025,7 @@ void display_text_centered(const char *s1, const char *s2) {
       line2[i + offset2] = s1[i + DISPLAY_WIDTH];
     }
   }
-  
+ 
   lcd.send_line(0, line1);
   lcd.send_line(1, line2);
 }
@@ -2270,14 +2305,13 @@ void process_hdd_voltage_check() {
   }
   
   if (_is_disk_voltage_on != _was_disk_voltage_on) {
-    if (_is_disk_voltage_on) {
-      display_message("HDD cage power", "\xFF\xFF  ON");
-    } else {
-      display_message("HDD cage power", "\x01\x05 OFF");
-    }
-
     _disk_power_last_toggle = millis();
     _was_disk_voltage_on = _is_disk_voltage_on;
+
+    if (display_message("HDD cage power", _is_disk_voltage_on ? "\xFF\xFF  ON" : "\x01\x05 OFF")) {
+      const MelodyNote play_notes[] = { { 1200, 500 } };
+      melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
+    }
   }
 }
 
@@ -2952,4 +2986,18 @@ void noTone_pwm() {
   interrupts();
 
   _melody_sound_remaining_cycles = 0;
+}
+
+uint32_t update_crc32(uint32_t crc, const char *s) {
+    while (*s) {
+        crc ^= (uint8_t)(*s++);
+        for (int i = 0; i < 8; i++) {
+            if (crc & 1) {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    return crc;
 }
