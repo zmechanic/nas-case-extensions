@@ -30,33 +30,6 @@ static const uint8_t ONEWIRE_PIN = 15;
 static const uint8_t DISPLAY_BUTTON_LEFT_PIN = 16;
 // remaining unused pins are: 3, 4
 
-static uint8_t serial_data[64];
-static uint8_t serial_write_offset = 0;
-
-typedef enum {
-  WAIT_STATUS_MASK_BOOT = 1 << 4,
-  WAIT_STATUS_MASK_REBOOT = 1 << 5,
-  WAIT_STATUS_MASK_SHUTDOWN = 1 << 6,
-  WAIT_STATUS_MASK_SLEEP = 1 << 7,
-} WaitStatusMask;
-
-typedef enum {
-  WAIT_STATUS_READY           = 0,
-  WAIT_STATUS_BOOT_PHASE1     = WAIT_STATUS_MASK_BOOT | 1,      // powered up
-  WAIT_STATUS_BOOT_PHASE2     = WAIT_STATUS_MASK_BOOT | 2,      // USB connected (kernel loaded, CDC driver connected)
-  WAIT_STATUS_BOOT_PHASEN     = WAIT_STATUS_MASK_BOOT | 3,      // user defined boot stages
-  WAIT_STATUS_REBOOT_PHASE1   = WAIT_STATUS_MASK_REBOOT | 1,    // reboot intialized (everything is still working)
-  WAIT_STATUS_REBOOT_PHASE2   = WAIT_STATUS_MASK_REBOOT | 2,    // final stage of reboot (USB suspended but still connected, we need to wait for USB disconnect)
-  WAIT_STATUS_SHUTDOWN_PHASE1 = WAIT_STATUS_MASK_SHUTDOWN | 1,  // shutdown intialized (everything is still working)
-  WAIT_STATUS_SHUTDOWN_PHASE2 = WAIT_STATUS_MASK_SHUTDOWN | 2,  // final stage of shutdown (USB suspended)
-  WAIT_STATUS_SLEEP_PHASE1    = WAIT_STATUS_MASK_SLEEP | 1,     // prepairing for sleep
-  WAIT_STATUS_SLEEP_PHASE2    = WAIT_STATUS_MASK_SLEEP | 2,     // just before entering sleep
-  WAIT_STATUS_SLEEP           = WAIT_STATUS_MASK_SLEEP | 3,     // actual sleep status
-} WaitStatus;
-
-static WaitStatus _wait_status;
-static unsigned long _last_status_change_time = 0;
-
 static const int8_t COMMAND_LEN = 2;
 static const uint16_t CMD_RESET = ('~' << 8) | 'R';
 static const uint16_t CMD_CANCEL_WAIT_STATUS = ('#' << 8) | '0';
@@ -94,18 +67,26 @@ static const uint16_t CMD_DISK_SHUTDOWN_DELAY_SET = ('H' << 8) | 'D';
 static const uint16_t CMD_DISK_TEMPERATURE_ALERT_SET = ('H' << 8) | 'A';
 static const uint16_t CMD_DISK_TEMPERATURE_FAN_HYSTERESYS_LINK_SET = ('H' << 8) | 'F';
 
-// Error return codes
-static const int8_t ERR_COMMAND_OVERFLOW = -1;
-static const int8_t ERR_UNKNOWN_COMMAND = -2;
-static const int8_t ERR_NO_COMMAND_PARAMETERS = -3;
-static const int8_t ERR_INVALID_PARAMETERS = -4;
+typedef enum {
+  WAIT_STATUS_MASK_BOOT = 1 << 4,
+  WAIT_STATUS_MASK_REBOOT = 1 << 5,
+  WAIT_STATUS_MASK_SHUTDOWN = 1 << 6,
+  WAIT_STATUS_MASK_SLEEP = 1 << 7,
+} WaitStatusMask;
 
-// Display config
-static const uint8_t DISPLAY_WIDTH = 16;
-static const uint8_t DISPLAY_HEIGHT = 2;
-
-// Sensor config
-static const int8_t SENSOR_NOT_PRESENT = -127;
+typedef enum {
+  WAIT_STATUS_READY           = 0,
+  WAIT_STATUS_BOOT_PHASE1     = WAIT_STATUS_MASK_BOOT | 1,      // powered up
+  WAIT_STATUS_BOOT_PHASE2     = WAIT_STATUS_MASK_BOOT | 2,      // USB connected (kernel loaded, CDC driver connected)
+  WAIT_STATUS_BOOT_PHASEN     = WAIT_STATUS_MASK_BOOT | 3,      // user defined boot stages
+  WAIT_STATUS_REBOOT_PHASE1   = WAIT_STATUS_MASK_REBOOT | 1,    // reboot intialized (everything is still working)
+  WAIT_STATUS_REBOOT_PHASE2   = WAIT_STATUS_MASK_REBOOT | 2,    // final stage of reboot (USB suspended but still connected, we need to wait for USB disconnect)
+  WAIT_STATUS_SHUTDOWN_PHASE1 = WAIT_STATUS_MASK_SHUTDOWN | 1,  // shutdown intialized (everything is still working)
+  WAIT_STATUS_SHUTDOWN_PHASE2 = WAIT_STATUS_MASK_SHUTDOWN | 2,  // final stage of shutdown (USB suspended)
+  WAIT_STATUS_SLEEP_PHASE1    = WAIT_STATUS_MASK_SLEEP | 1,     // prepairing for sleep
+  WAIT_STATUS_SLEEP_PHASE2    = WAIT_STATUS_MASK_SLEEP | 2,     // just before entering sleep
+  WAIT_STATUS_SLEEP           = WAIT_STATUS_MASK_SLEEP | 3,     // actual sleep status
+} WaitStatus;
 
 typedef enum {
   DISPLAY_PAGE_TYPE_BLINK_INFO = 0,
@@ -125,6 +106,7 @@ typedef enum {
   DISPLAY_PAGE_TYPE_LOAD_RAM,
   DISPLAY_PAGE_TYPE_LOAD_LAN_UPLOAD,
   DISPLAY_PAGE_TYPE_LOAD_LAN_DOWNLOAD,
+  DISPLAY_PAGE_TYPE_LOAD_ALL,
   DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS,
   DISPLAY_PAGE_TYPE_UPTIME,
   DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE,
@@ -145,10 +127,10 @@ typedef enum {
 
 typedef enum {
   EXT_SENSOR_INDEX_CPU = 0,
+  EXT_SENSOR_INDEX_MOTHERBOARD,
   EXT_SENSOR_INDEX_RAM,
   EXT_SENSOR_INDEX_LAN_UPLOAD,
   EXT_SENSOR_INDEX_LAN_DOWNLOAD,
-  EXT_SENSOR_INDEX_MOTHERBOARD,
   EXT_SENSOR_INDEX_HDD1,
   EXT_SENSOR_INDEX_HDD2,
   EXT_SENSOR_INDEX_HDD3,
@@ -158,8 +140,8 @@ typedef enum {
 } ExtSensorIndex;
 
 typedef enum {
-  EXT_FAN_SENSOR_INDEX_CPU = 0,
-  EXT_FAN_SENSOR_INDEX_MOTHERBOARD,
+  EXT_FAN_SENSOR_INDEX_CPU = EXT_SENSOR_INDEX_CPU,
+  EXT_FAN_SENSOR_INDEX_MOTHERBOARD = EXT_SENSOR_INDEX_MOTHERBOARD,
   EXT_FAN_SENSOR_INDEX__DO_NOT_REMOVE
 } ExtFanSensorIndex;
 
@@ -244,9 +226,25 @@ static const RgbColor RGB_TURQUOISE = { 0, 255, 128 };
 static const RgbColor RGB_PINK = { 255, 0, 70 };
 static const RgbColor RGB_PURPLE = { 255, 0, 255 };
 
-static const float ADC_REF_VOLTAGE = 2.56F;
+// Error return codes
+static const int8_t ERR_UNKNOWN_COMMAND = -2;
+static const int8_t ERR_NO_COMMAND_PARAMETERS = -3;
+static const int8_t ERR_INVALID_PARAMETERS = -4;
+
+// Display config
+static const uint8_t DISPLAY_WIDTH = 16;
+static const uint8_t DISPLAY_HEIGHT = 2;
+
+// Sensor config
+static const int8_t SENSOR_NOT_PRESENT = -127;
 
 static bool _use_fahrenheit_temp = false;
+
+static uint8_t serial_data[64];
+static uint8_t serial_write_offset = 0;
+
+static WaitStatus _wait_status;
+static unsigned long _last_status_change_time = 0;
 
 static volatile uint32_t _melody_sound_remaining_cycles = 0;
 static bool _is_melody_quick_playing = false;
@@ -296,12 +294,12 @@ static uint8_t _disk_power_button_debouncer = 0;
 static bool _is_disk_voltage_on = false;
 static bool _was_disk_voltage_on = false;
 static bool ___fake_disk_voltage_on = false;
-static uint8_t _disk_voltage_12v_run[4];
-static uint8_t _disk_voltage_5v_run[4];
-static uint8_t _disk_voltage_12v = 0;
-static float _disk_voltage_12v_kf = 15.0F / ADC_REF_VOLTAGE;
-static uint8_t _disk_voltage_5v = 0;
-static float _disk_voltage_5v_kf = 8.0F / ADC_REF_VOLTAGE;
+static uint16_t _disk_voltage_12v_run[4];
+static uint16_t _disk_voltage_5v_run[4];
+static float _disk_voltage_12v = 0;
+static float _disk_voltage_12v_kf = 15.0F / 1024.0F;
+static float _disk_voltage_5v = 0;
+static float _disk_voltage_5v_kf = 8.0F / 1024.0F;
 
 static uint8_t _display_button_right_debouncer = 0;
 static uint8_t _display_button_left_debouncer = 0;
@@ -324,7 +322,7 @@ static int16_t ext_fans[EXT_FAN_SENSOR_INDEX__DO_NOT_REMOVE];
 static int8_t ext_temps[EXT_SENSOR_INDEX__DO_NOT_REMOVE];
 static int8_t ext_loads[EXT_SENSOR_INDEX__DO_NOT_REMOVE];
 
-static char *display_page_texts[DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST + 1];
+static char display_page_texts[DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST + 1][DISPLAY_WIDTH * DISPLAY_HEIGHT];
 static uint8_t display_page_map[DISPLAY_PAGE_TYPE__DO_NOT_REMOVE];
 
 static uint32_t _last_check_time_1o4_second_counter = 0;
@@ -409,7 +407,6 @@ void setup() {
   interrupts();
 
   wdt_reset();
-  wdt_enable(WDTO_500MS);
 }
 
 void loop() {
@@ -422,7 +419,7 @@ void loop() {
   process_wait_status_changes(elapsed_time);
 
   if (Serial) {
-    if (Serial.available() > 0) {
+    while (Serial.available()) {
       uint8_t c = Serial.read();
       if (serial_write_offset && (c == '\r' || c == '\n' || c == '\0')) {
         serial_data[serial_write_offset] = 0;
@@ -430,9 +427,8 @@ void loop() {
         serial_write_offset = 0;
       } else {
         serial_data[serial_write_offset++] = c;
-        if (serial_write_offset == sizeof(serial_data)) {
+        if (serial_write_offset >= sizeof(serial_data)) {
           serial_write_offset = 0;
-          play_error_sound(ERR_COMMAND_OVERFLOW);
         }
       }
     }
@@ -484,10 +480,11 @@ void loop() {
   }
 
   // *** LOW PRIORITY CODE STARTS HERE ***
-  // Every 1 second updates
-  if (_last_check_time_1o4_second_counter % 4) {
-    fan_pwm_apply_updated_values();
+  const uint32_t second_1_remainder = _last_check_time_1o4_second_counter % 4;
+  const uint32_t second_2_remainder = _last_check_time_1o4_second_counter % 8;
 
+  // Every 1 second updates
+  if (second_1_remainder == 0) {
     if (!_is_showing_alert && !_is_showing_info) {
       if (_wait_status != WAIT_STATUS_READY) {
         if (elapsed_time > _display_button_screen_page_hold_end_time) {
@@ -497,9 +494,11 @@ void loop() {
         display_page(_display_page_current);
       }
     }
-
+  } else if (second_1_remainder == 1) {
     rgb_led_restore_color();
     rgb_led_update_all();
+  } else if (second_1_remainder == 2) {
+    fan_pwm_apply_updated_values();
   }
 
   // Don't run any other code in sleep
@@ -507,9 +506,10 @@ void loop() {
     return;
   }
 
-  // Every 2 seconds updates
-  if (_last_check_time_1o4_second_counter % 8) {
+  // Every 2 seconds updates (remainders 3 and 7 are the only those ones that don't overlap with remainders 0, 1, 2 on 1 second interval)
+  if (second_2_remainder == 3) {
     temp_sensors_update();
+  } else if (second_2_remainder == 7) {
     check_for_alerts();
   }
 }
@@ -1007,8 +1007,8 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
       const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
 
-      _disk_voltage_12v_kf = tokens[0] / (tokens[0] < 20 ? 1.0F : tokens[0] < 200 ? 10.0F : 100.0F) / ADC_REF_VOLTAGE;
-      _disk_voltage_5v_kf = tokens[1] / (tokens[1] < 10 ? 1.0F : tokens[1] < 100 ? 10.0F : 100.0F) / ADC_REF_VOLTAGE;
+      _disk_voltage_12v_kf = (tokens[0] / (tokens[0] < 20 ? 1.0F : tokens[0] < 200 ? 10.0F : 100.0F)) / 1024.0F;
+      _disk_voltage_5v_kf = (tokens[1] / (tokens[1] < 20 ? 1.0F : tokens[1] < 200 ? 10.0F : 100.0F)) / 1024.0F;
     }
 
     return chars_count;
@@ -1151,10 +1151,6 @@ uint8_t parse_uint16_t(const char *p, uint16_t *value) {
 }
 
 void write_to_page (const uint8_t page_index, const uint8_t payload[], const uint8_t payload_length) {
-  if (display_page_texts[page_index] == NULL) {
-    display_page_texts[page_index] = malloc(DISPLAY_WIDTH * DISPLAY_HEIGHT);
-  }
-
   char *dst = display_page_texts[page_index];
 
   uint8_t write_counter = 0;
@@ -1541,7 +1537,7 @@ void process_display_button() {
   }
 
   if (_wait_status != WAIT_STATUS_READY) {
-    if (display_message("System is busy", "please wait...")) {
+    if (display_message("System is busy", "Please wait...")) {
       play_invalid_op_sound();
     }
     return;
@@ -1591,7 +1587,7 @@ void process_display_button() {
       continue;
     }
 
-    if (physical_page_index <= DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST && !display_page_texts[physical_page_index]) {
+    if (physical_page_index <= DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST && display_page_texts[physical_page_index][0] == '\0') {
       logical_page_index += scan_incrementor;
       continue;
     }
@@ -1759,7 +1755,7 @@ void display_page(const uint8_t index) {
   _display_page_actual = index;
 
   if (index <= DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST) {
-    if (!display_page_texts[index]) {
+    if (display_page_texts[index][0] == '\0') {
       char header_text[] = "*** CUSTOM # ***";
       header_text[11] = index + '0';
 
@@ -1785,7 +1781,8 @@ void display_page(const uint8_t index) {
     case DISPLAY_PAGE_TYPE_LOAD_CPU: display_page_load("CPU load", ext_loads[EXT_SENSOR_INDEX_CPU]); return;
     case DISPLAY_PAGE_TYPE_LOAD_RAM: display_page_load("RAM alloc", ext_loads[EXT_SENSOR_INDEX_RAM]); return;
     case DISPLAY_PAGE_TYPE_LOAD_LAN_UPLOAD: display_page_load("LAN upload", ext_loads[EXT_SENSOR_INDEX_LAN_UPLOAD]); return;
-    case DISPLAY_PAGE_TYPE_LOAD_LAN_DOWNLOAD: display_page_load("LAN dnload", ext_loads[EXT_SENSOR_INDEX_LAN_DOWNLOAD]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_LAN_DOWNLOAD: display_page_load("LAN downld", ext_loads[EXT_SENSOR_INDEX_LAN_DOWNLOAD]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_ALL: display_page_all_loads(); return;
     case DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS: display_page_all_disk_loads(); return;
     case DISPLAY_PAGE_TYPE_UPTIME: display_page_uptime(); return;
     case DISPLAY_PAGE_TYPE_HDD_CAGE_VOLTAGE: display_page_hdd_cage_voltage(); return;
@@ -1846,6 +1843,18 @@ void display_page_all_temps() {
 }
 
 void display_page_all_disk_temps() {
+  if (!_is_disk_voltage_on) {
+    lcd.send_line(0, "HDD temperatures");
+    lcd.send_line(1, " NO CAGE POWER! ");
+    return;
+  }
+
+  if (_array_started_led_code == 0) {
+    lcd.send_line(0, "HDD temperatures");
+    lcd.send_line(1, " ARRAY OFFLINE! ");
+    return;
+  }
+
   char line2[] = "                ";
 
   const uint8_t number_of_digits = _use_fahrenheit_temp ? 3 : 2;
@@ -1903,7 +1912,59 @@ void display_page_load(const char *caption, const int8_t percentage) {
   }
 }
 
+void display_page_all_loads() {
+  char line1[] = "CPU:     Lu:    ";
+  char line2[] = "RAM:     Ld:    ";
+
+  print_percent_l_to_r(ext_loads[EXT_SENSOR_INDEX_CPU], &line1[4]);
+  print_percent_l_to_r(ext_loads[EXT_SENSOR_INDEX_RAM], &line2[4]);
+  print_percent_l_to_r(ext_loads[EXT_SENSOR_INDEX_LAN_UPLOAD], &line1[12]);
+  print_percent_l_to_r(ext_loads[EXT_SENSOR_INDEX_LAN_DOWNLOAD], &line2[12]);
+
+  lcd.send_line(0, line1);
+  lcd.send_line(1, line2);
+}
+
+void print_percent_l_to_r(int val, char *start) {
+  if (val < 0) {
+    start[0] = '-';
+    start[1] = '-';
+    start[2] = '-';
+    start[3] = '%';
+    return;
+  }
+
+  if (val < 10) {
+    itoar(val, start);
+    start[1] = '%';
+    return;
+  }
+
+  if (val < 100) {
+    itoar(val, start + 1);
+    start[2] = '%';
+    return;
+  }
+
+  start[0] = '1';
+  start[1] = '0';
+  start[2] = '0';
+  start[3] = '%';
+}
+
 void display_page_all_disk_loads() {
+  if (!_is_disk_voltage_on) {
+    lcd.send_line(0, "HDD space used %");
+    lcd.send_line(1, " NO CAGE POWER! ");
+    return;
+  }
+
+  if (_array_started_led_code == 0) {
+    lcd.send_line(0, "HDD space used %");
+    lcd.send_line(1, " ARRAY OFFLINE! ");
+    return;
+  }
+
   char line2[] = "                ";
 
   for (uint8_t disk_index = 0; disk_index <= EXT_SENSOR_INDEX_HDD_LAST - EXT_SENSOR_INDEX_HDD1; disk_index++) {
@@ -1932,13 +1993,13 @@ void display_page_hdd_cage_voltage() {
 
   char line2[] = "12v:00.0  5v:0.0";
 
-  uint8_t int_part_12v = _disk_voltage_12v / 10;
-  uint8_t dec_part_12v = _disk_voltage_12v - (int_part_12v * 10);
+  uint8_t int_part_12v = _disk_voltage_12v;
+  uint8_t dec_part_12v = (_disk_voltage_12v - int_part_12v) * 10;
   itoar(int_part_12v, &line2[5]);
   itoar(dec_part_12v, &line2[7]);
 
-  uint8_t int_part_5v = _disk_voltage_5v / 10;
-  uint8_t dec_part_5v = _disk_voltage_5v - (int_part_5v * 10);
+  uint8_t int_part_5v = _disk_voltage_5v;
+  uint8_t dec_part_5v = (_disk_voltage_5v - int_part_5v) * 10;
   itoar(int_part_5v, &line2[13]);
   itoar(dec_part_5v, &line2[15]);
 
@@ -2214,7 +2275,7 @@ void init_display_pages() {
   const uint8_t page_map_length = sizeof(display_page_map) / sizeof(display_page_map[0]);
 
   for (uint8_t i = 0; i < custom_pages_count; i++) {
-    display_page_texts[i] = NULL;
+    display_page_texts[i][0] = '\0';
   }
 
   for (uint8_t i = 0; i < page_map_length; i++) {
@@ -2311,16 +2372,16 @@ void process_hdd_voltage_check() {
   }
 
   if (adc_channel == ADC_PIN_12V) {
-    const float v = ((adc_value * ADC_REF_VOLTAGE) / 102.4F) * _disk_voltage_12v_kf;
-    _disk_voltage_12v = roll_and_average(_disk_voltage_12v_run, sizeof(_disk_voltage_12v_run) / sizeof(_disk_voltage_12v_run[0]), v);
+    const uint16_t avg_adc_value = roll_and_average(_disk_voltage_12v_run, sizeof(_disk_voltage_12v_run) / sizeof(_disk_voltage_12v_run[0]), adc_value);
+    _disk_voltage_12v = avg_adc_value * _disk_voltage_12v_kf;
     adc_sampling_start(ADC_PIN_5V);
   } else if (adc_channel == ADC_PIN_5V) {
-    const float v = ((adc_value * ADC_REF_VOLTAGE) / 102.4F) * _disk_voltage_5v_kf;
-    _disk_voltage_5v = roll_and_average(_disk_voltage_5v_run, sizeof(_disk_voltage_5v_run) / sizeof(_disk_voltage_5v_run[0]), v);
+    const uint16_t avg_adc_value = roll_and_average(_disk_voltage_5v_run, sizeof(_disk_voltage_5v_run) / sizeof(_disk_voltage_5v_run[0]), adc_value);
+    _disk_voltage_5v = avg_adc_value * _disk_voltage_5v_kf;
     adc_sampling_start(ADC_PIN_12V);
   }
 
-  if (___fake_disk_voltage_on || _disk_voltage_12v > 50) {
+  if (___fake_disk_voltage_on || _disk_voltage_12v > 3) {
     _is_disk_voltage_on = true;
   } else {
     _is_disk_voltage_on = false;
@@ -2338,7 +2399,7 @@ void process_hdd_voltage_check() {
   }
 }
 
-uint8_t roll_and_average(uint8_t * run, const uint8_t run_len, const uint8_t v) {
+uint16_t roll_and_average(uint16_t * run, const uint8_t run_len, const uint16_t v) {
   uint32_t run_acc = run[0];
   for (uint8_t i = 1; i < run_len; i++) {
     run_acc += run[i - 1];
@@ -2438,7 +2499,7 @@ bool process_external_status_changes() {
     melody_play(play_notes, sizeof(play_notes) / sizeof(play_notes[0]));
   }
 
-  return status_toggle_1_0 | status_toggle_0_1;
+  return status_toggle_1_0 | status_toggle_0_1 | status_ad_hoc_change;
 }
 
 void fade_out_lcd_backlight() {
