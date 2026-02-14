@@ -431,7 +431,6 @@ void loop() {
         if (payload_length > 0) {
           serial_data[payload_length] = '\0';
           parse_command(payload_length);
-          Serial.println("@@@@@@@");
         }  
         serial_write_offset = 0;
         continue;
@@ -1093,7 +1092,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     //     ext_temps[sensor_index] = tokens[1] > 255 ? SENSOR_NOT_PRESENT : tokens[1] < 127 ? tokens[1] : 127;
     //   }
     // }
-    Serial.println("//done//");
+
     return chars_count;
   }
 
@@ -1283,8 +1282,6 @@ bool cmd_external_sensor_set(const uint16_t cmd, [[maybe_unused]] const uint8_t 
     return true;
   }
   
-  //zzz
-  //EF1,2500;2,3500
   if (cmd == CMD_EXTERNAL_SENSOR_SET_FANS) {
     const uint8_t max_number_of_sensors = (sizeof(ext_fans) / sizeof(ext_fans[0]));
     const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
@@ -1314,17 +1311,9 @@ bool process_token_chunks(const uint16_t cmd, const TokenChunk *token_chunks, ui
       return false;
     }
 
-      for (uint8_t i = 0; i < tokens_count; i++) {
-    uint16_t v = token_chunks[token_chunk_index].tokens[i];
-    Serial.print(v);
-    Serial.print(",");
-  }
-    Serial.println("==========");
-
-
-    // if (!cmd_delegate(cmd, token_chunk_index, token_chunks[token_chunk_index].tokens, tokens_count)) {
-    //   return false;
-    // }
+    if (!cmd_delegate(cmd, token_chunk_index, token_chunks[token_chunk_index].tokens, tokens_count)) {
+      return false;
+    }
   }
 
   return true;
@@ -2009,29 +1998,29 @@ void display_page(const uint8_t index) {
       char header_text[] = "*** CUSTOM # ***";
       header_text[11] = index + '0';
 
-      lcd.send_line(0, header_text);
-      lcd.send_line(1, "  TEXT NOT SET  ");
+      lcd_send_line(0, header_text);
+      lcd_send_line(1, F("  TEXT NOT SET  "));
       return;
     }
 
     for (uint8_t line_index = 0; line_index < DISPLAY_HEIGHT; line_index++) {
-      lcd.send_line(line_index, &display_page_texts[index][line_index * DISPLAY_WIDTH]);
+      lcd_send_line(line_index, &display_page_texts[index][line_index * DISPLAY_WIDTH]);
     }
 
     return;
   }
 
   switch (index) {
-    case DISPLAY_PAGE_TYPE_COOLING_HDD: display_page_sensor("HDD cage cooling", fans[INT_FAN_SENSOR_INDEX_HDD].current_rpm, temps[INT_TEMP_SENSOR_INDEX_HDD].current_temp); return;
-    case DISPLAY_PAGE_TYPE_COOLING_LSI: display_page_sensor("LSI card cooling", fans[INT_FAN_SENSOR_INDEX_LSI].current_rpm, temps[INT_TEMP_SENSOR_INDEX_LSI].current_temp); return;
-    case DISPLAY_PAGE_TYPE_COOLING_CPU: display_page_sensor("CPU slot cooling", ext_fans[EXT_FAN_SENSOR_INDEX_CPU], ext_temps[EXT_SENSOR_INDEX_CPU]); return;
-    case DISPLAY_PAGE_TYPE_COOLING_MOTHERBOARD: display_page_sensor("Mother/b cooling", ext_fans[EXT_FAN_SENSOR_INDEX_MOTHERBOARD], ext_temps[EXT_SENSOR_INDEX_MOTHERBOARD]); return;
+    case DISPLAY_PAGE_TYPE_COOLING_HDD: display_page_sensor(F("HDD cage cooling"), fans[INT_FAN_SENSOR_INDEX_HDD].current_rpm, temps[INT_TEMP_SENSOR_INDEX_HDD].current_temp); return;
+    case DISPLAY_PAGE_TYPE_COOLING_LSI: display_page_sensor(F("LSI card cooling"), fans[INT_FAN_SENSOR_INDEX_LSI].current_rpm, temps[INT_TEMP_SENSOR_INDEX_LSI].current_temp); return;
+    case DISPLAY_PAGE_TYPE_COOLING_CPU: display_page_sensor(F("CPU slot cooling"), ext_fans[EXT_FAN_SENSOR_INDEX_CPU], ext_temps[EXT_SENSOR_INDEX_CPU]); return;
+    case DISPLAY_PAGE_TYPE_COOLING_MOTHERBOARD: display_page_sensor(F("Mother/b cooling"), ext_fans[EXT_FAN_SENSOR_INDEX_MOTHERBOARD], ext_temps[EXT_SENSOR_INDEX_MOTHERBOARD]); return;
     case DISPLAY_PAGE_TYPE_COOLING_ALL: display_page_all_temps(); return;
     case DISPLAY_PAGE_TYPE_COOLING_ALL_DISKS: display_page_all_disk_temps(); return;
-    case DISPLAY_PAGE_TYPE_LOAD_CPU: display_page_load("CPU load", ext_loads[EXT_SENSOR_INDEX_CPU]); return;
-    case DISPLAY_PAGE_TYPE_LOAD_RAM: display_page_load("RAM alloc", ext_loads[EXT_SENSOR_INDEX_RAM]); return;
-    case DISPLAY_PAGE_TYPE_LOAD_LAN_UPLOAD: display_page_load("LAN upload", ext_loads[EXT_SENSOR_INDEX_LAN_UPLOAD]); return;
-    case DISPLAY_PAGE_TYPE_LOAD_LAN_DOWNLOAD: display_page_load("LAN downld", ext_loads[EXT_SENSOR_INDEX_LAN_DOWNLOAD]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_CPU: display_page_load(F("CPU load"), ext_loads[EXT_SENSOR_INDEX_CPU]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_RAM: display_page_load(F("RAM alloc"), ext_loads[EXT_SENSOR_INDEX_RAM]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_LAN_UPLOAD: display_page_load(F("LAN upload"), ext_loads[EXT_SENSOR_INDEX_LAN_UPLOAD]); return;
+    case DISPLAY_PAGE_TYPE_LOAD_LAN_DOWNLOAD: display_page_load(F("LAN downld"), ext_loads[EXT_SENSOR_INDEX_LAN_DOWNLOAD]); return;
     case DISPLAY_PAGE_TYPE_LOAD_ALL: display_page_all_loads(); return;
     case DISPLAY_PAGE_TYPE_LOAD_ALL_DISKS: display_page_all_disk_loads(); return;
     case DISPLAY_PAGE_TYPE_UPTIME: display_page_uptime(); return;
@@ -2040,8 +2029,8 @@ void display_page(const uint8_t index) {
   }
 }
 
-void display_page_sensor(const char *title, const int16_t fan_rpm, const int8_t temp) {
-  char line2[17] = "     RPM      \xDF";
+void display_page_sensor(const __FlashStringHelper *title, const int16_t fan_rpm, const int8_t temp) {
+  char line2[] = "     RPM      \xDF";
 
   if (fan_rpm >= 0) {
     itoar(fan_rpm, &line2[3]);
@@ -2055,8 +2044,8 @@ void display_page_sensor(const char *title, const int16_t fan_rpm, const int8_t 
   write_temperature(&line2[12], temp, 4);
   line2[15] = _use_fahrenheit_temp ? 'F' : 'C';
 
-  lcd.send_line(0, title);
-  lcd.send_line(1, line2);
+  lcd_send_line(0, title);
+  lcd_send_line(1, line2);
 }
 
 void display_page_all_temps() {
@@ -2088,20 +2077,20 @@ void display_page_all_temps() {
   write_temperature(&line1[14], temps[0].current_temp, number_of_digits);
   write_temperature(&line2[14], temps[1].current_temp, number_of_digits);
 
-  lcd.send_line(0, line1);
-  lcd.send_line(1, line2);
+  lcd_send_line(0, line1);
+  lcd_send_line(1, line2);
 }
 
 void display_page_all_disk_temps() {
   if (!_is_disk_voltage_on) {
-    lcd.send_line(0, "HDD temperatures");
-    lcd.send_line(1, " NO CAGE POWER! ");
+    lcd_send_line(0, F("HDD temperatures"));
+    lcd_send_line(1, F(" NO CAGE POWER! "));
     return;
   }
 
   if (_array_started_led_code == 0) {
-    lcd.send_line(0, "HDD temperatures");
-    lcd.send_line(1, " ARRAY OFFLINE! ");
+    lcd_send_line(0, F("HDD temperatures"));
+    lcd_send_line(1, F(" ARRAY OFFLINE! "));
     return;
   }
 
@@ -2122,15 +2111,15 @@ void display_page_all_disk_temps() {
     write_temperature(&line2[char_offset + 2], ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1], number_of_digits);
   }
 
-  lcd.send_line(0, "HDD1  #2  #3  #4");
-  lcd.send_line(1, line2);
+  lcd_send_line(0, F("HDD1  #2  #3  #4"));
+  lcd_send_line(1, line2);
 }
 
-void display_page_load(const char *caption, const int8_t percentage) {
+void display_page_load(const __FlashStringHelper *title, const int8_t percentage) {
   char line1[] = "               %";
   char line2[] = "\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x05";
 
-  strcopy(line1, caption, DISPLAY_WIDTH);
+  strcopy(line1, title, DISPLAY_WIDTH);
 
   if (percentage >= 0) {
     itoar(percentage, &line1[13]);
@@ -2154,10 +2143,10 @@ void display_page_load(const char *caption, const int8_t percentage) {
     line1[13] = '-';
   }
 
-  lcd.send_line(0, line1);
+  lcd_send_line(0, line1);
 
   lcd.setCursor(0, 1);
-  for (uint8_t i = 0; i < 16; i++) {
+  for (uint8_t i = 0; i < DISPLAY_WIDTH; i++) {
     lcd.data(line2[i]);
   }
 }
@@ -2171,8 +2160,8 @@ void display_page_all_loads() {
   print_percent_l_to_r(ext_loads[EXT_SENSOR_INDEX_LAN_UPLOAD], &line1[12]);
   print_percent_l_to_r(ext_loads[EXT_SENSOR_INDEX_LAN_DOWNLOAD], &line2[12]);
 
-  lcd.send_line(0, line1);
-  lcd.send_line(1, line2);
+  lcd_send_line(0, line1);
+  lcd_send_line(1, line2);
 }
 
 void print_percent_l_to_r(int val, char *start) {
@@ -2204,14 +2193,14 @@ void print_percent_l_to_r(int val, char *start) {
 
 void display_page_all_disk_loads() {
   if (!_is_disk_voltage_on) {
-    lcd.send_line(0, "HDD space used %");
-    lcd.send_line(1, " NO CAGE POWER! ");
+    lcd_send_line(0, F("HDD space used %"));
+    lcd_send_line(1, F(" NO CAGE POWER! "));
     return;
   }
 
   if (_array_started_led_code == 0) {
-    lcd.send_line(0, "HDD space used %");
-    lcd.send_line(1, " ARRAY OFFLINE! ");
+    lcd_send_line(0, F("HDD space used %"));
+    lcd_send_line(1, F(" ARRAY OFFLINE! "));
     return;
   }
 
@@ -2230,14 +2219,14 @@ void display_page_all_disk_loads() {
     itoar(ext_loads[disk_index + EXT_SENSOR_INDEX_HDD1], &line2[char_offset + 2]);
   }
 
-  lcd.send_line(0, "HDD1  #2  #3  #4");
-  lcd.send_line(1, line2);
+  lcd_send_line(0, F("HDD1  #2  #3  #4"));
+  lcd_send_line(1, line2);
 }
 
 void display_page_hdd_cage_voltage() {
   if (!_is_disk_voltage_on) {
-    lcd.send_line(0, "HDD switched OFF");
-    lcd.send_line(1, "hold L+R to [ON]");
+    lcd_send_line(0, F("HDD switched OFF"));
+    lcd_send_line(1, F("hold L+R to [ON]"));
     return;
   }
 
@@ -2253,8 +2242,8 @@ void display_page_hdd_cage_voltage() {
   itoar(int_part_5v, &line2[13]);
   itoar(dec_part_5v, &line2[15]);
 
-  lcd.send_line(0, "HDD cage voltage");
-  lcd.send_line(1, line2);
+  lcd_send_line(0, F("HDD cage voltage"));
+  lcd_send_line(1, line2);
 }
 
 void display_page_uptime() {
@@ -2272,8 +2261,34 @@ void display_page_uptime() {
   itoar(minutes, &line2[12]);
   itoar(seconds, &line2[15]);
 
-  lcd.send_line(0, "  POWER UPTIME  ");
-  lcd.send_line(1, line2);
+  lcd_send_line(0, F("  POWER UPTIME  "));
+  lcd_send_line(1, line2);
+}
+
+
+void lcd_send_line(const uint8_t row, const char *str) {
+  lcd.send_line(row, str);
+}
+
+void lcd_send_line(const uint8_t row, const __FlashStringHelper *str) {
+  lcd.setCursor(0, row);
+
+  const char *flash_ptr = reinterpret_cast<const char*>(str);
+  
+  for (uint8_t i = 0; i < DISPLAY_WIDTH; i++)
+	{
+    char c = pgm_read_byte(flash_ptr + i);
+		if (c == '\0')
+		{
+			for (uint8_t j = i; j < DISPLAY_WIDTH; j++) {
+				lcd.data(' ');
+      }
+
+			return;
+		}
+
+    lcd.data(c);
+	}
 }
 
 bool display_message(const char *s1, const char *s2, bool is_alert) {
@@ -2320,8 +2335,8 @@ bool display_message(const char *s1, const char *s2, bool is_alert) {
 }
 
 bool display_message(const __FlashStringHelper *s1, const __FlashStringHelper *s2, bool is_alert) {
-  char line1[DISPLAY_WIDTH];
-  char line2[DISPLAY_WIDTH];
+  char line1[DISPLAY_WIDTH + 1];
+  char line2[DISPLAY_WIDTH + 1];
 
   strcopy(line1, s1, DISPLAY_WIDTH);
   strcopy(line2, s2, DISPLAY_WIDTH);
@@ -2356,8 +2371,8 @@ void display_text_centered(const char *s1, const char *s2) {
     }
   }
  
-  lcd.send_line(0, line1);
-  lcd.send_line(1, line2);
+  lcd_send_line(0, line1);
+  lcd_send_line(1, line2);
 }
 
 void display_wait_screen() {
@@ -2366,8 +2381,8 @@ void display_wait_screen() {
   }
 
   if (_wait_status == WAIT_STATUS_SLEEP) {
-    lcd.send_line(0, "   SLEEP MODE   ");
-    lcd.send_line(1, "POWER to wake-up");
+    lcd_send_line(0, F("   SLEEP MODE   "));
+    lcd_send_line(1, F("POWER to wake-up"));
     return;
   }
 
@@ -2391,8 +2406,8 @@ void display_wait_screen() {
         strcopy(&line2[6], F("NOW!"), DISPLAY_WIDTH);
       }
 
-      lcd.send_line(0, "HDD powering OFF");
-      lcd.send_line(1, line2);
+      lcd_send_line(0, F("HDD powering OFF"));
+      lcd_send_line(1, line2);
     }
 
     return;
@@ -2424,8 +2439,8 @@ void display_wait_screen() {
     strcopy(line2, F("Bye-bye"), DISPLAY_WIDTH);
   }
 
-  lcd.send_line(0, line1);
-  lcd.send_line(1, line2);
+  lcd_send_line(0, line1);
+  lcd_send_line(1, line2);
 }
 
 void change_wait_status(const WaitStatus new_status) {
@@ -3094,11 +3109,10 @@ void strcopy(char *dst, const char *src, const uint8_t max_length) {
   }
 
   for (uint8_t i = 0; i < max_length; i++) {
+    dst[i] = src[i];
     if (src[i] == 0) {
       break;
     }
-
-    dst[i] = src[i];
   }
 }
 
@@ -3112,10 +3126,10 @@ void strcopy(char *dst, const __FlashStringHelper *src, uint8_t max_length) {
   uint8_t i = 0;
   for (; i < max_length - 1; ++i) {
     char c = pgm_read_byte(flash_ptr + i);
+    dst[i] = c;
     if (c == '\0') {
       break;
     }
-    dst[i] = c;
   }
 }
 
