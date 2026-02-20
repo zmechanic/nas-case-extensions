@@ -725,35 +725,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_rgb_led_color_set)) {
       return ERR_INVALID_PARAMETERS;
     }
-
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   if (token_chunk_index >= sizeof(_rgb_led_colors_user_set) / sizeof(_rgb_led_colors_user_set[0])) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count != 3 && tokens_count != 4) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-
-    //   RgbColor *color = &_rgb_led_colors_user_set[token_chunk_index];
-    //   color->r = tokens[0];
-    //   color->g = tokens[1];
-    //   color->b = tokens[2];
-    //   color->length = tokens_count > 3 ? tokens[3] : 0;
-
-    //   if (cmd == CMD_RGB_LED_BREATH_SET) {
-    //     _rgb_led_colors_user_mode = RGB_LED_USER_MODE_BREATHING_COLOR;
-    //     break;
-    //   }
-      
-    //   _rgb_led_colors_user_mode = RGB_LED_USER_MODE_CONSTANT_COLOR;
-    // }
-
     rgb_led_set_colors(_rgb_led_colors_user_set, sizeof(_rgb_led_colors_user_set) / sizeof(_rgb_led_colors_user_set[0]), _rgb_led_colors_user_mode == RGB_LED_USER_MODE_BREATHING_COLOR);
-
     return chars_count;
   }
 
@@ -763,30 +735,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_rgb_led_status_color_set)) {
       return ERR_INVALID_PARAMETERS;
     }
-
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   if (token_chunk_index >= sizeof(_rgb_led_status_user_set) / sizeof(_rgb_led_status_user_set[0])) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-
-    //   if (tokens_count == 3) {
-    //     RgbColor *color = &_rgb_led_status_user_set[token_chunk_index];
-    //     color->r = tokens[0];
-    //     color->g = tokens[1];
-    //     color->b = tokens[2];
-    //     color->length = 1;
-    //   } else if (tokens_count == 1 && tokens[0] == 0) {
-    //     continue;
-    //   } else {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-    // }
-
     rgb_led_update_all();
-
     return chars_count;
   }
 
@@ -868,24 +817,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_fan_speed_set)) {
       return ERR_INVALID_PARAMETERS;
     }
-
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count < 2) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   static const uint8_t number_of_fans = sizeof(fans)/sizeof(fans[0]);
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-    //   const uint8_t fan_index = (tokens[0] > 0 && tokens[0] <= number_of_fans) ? tokens[0] - 1 : 0;
-    //   const int8_t target_pwm = tokens[1] > 255 ? -1 : tokens[1] < 100 ? tokens[1] : 100;
-
-    //   fans[fan_index].req_duty_percentage = target_pwm;
-    //   fans[fan_index].use_hysteresys_curve = false;
-    // }
-
     fan_pwm_apply_updated_values();
-
     return chars_count;
   }
 
@@ -893,33 +825,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_fan_pwm_set)) {
       return ERR_INVALID_PARAMETERS;
     }
-
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count < 2) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   static const uint8_t number_of_fans = sizeof(fans)/sizeof(fans[0]);
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-    //   const uint8_t fan_index = (tokens[0] > 0 && tokens[0] <= number_of_fans) ? tokens[0] - 1 : 0;
-    //   const uint8_t min_pwm = tokens[1] < 100 ? tokens[1] * 2.55F : 255;
-
-    //   fans[fan_index].min_duty_cycle = min_pwm;
-
-    //   if (tokens_count > 2) {
-    //     const uint8_t max_pwm = tokens[2] < 100 ? tokens[2] * 2.55F : 255;
-    //     fans[fan_index].max_duty_cycle = max_pwm;
-    //   }
-
-    //   if (fans[fan_index].min_duty_cycle >= fans[fan_index].max_duty_cycle) {
-    //     fans[fan_index].min_duty_cycle = 0;
-    //     fans[fan_index].max_duty_cycle = 255;
-    //   }
-    // }
-
     fan_pwm_apply_updated_values();
-
     return chars_count;
   }
 
@@ -934,30 +840,7 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_fan_hysteresys_set)) {
       return ERR_INVALID_PARAMETERS;
     }
-
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count < 2) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   static const uint8_t number_of_fans = sizeof(fans)/sizeof(fans[0]);
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-    //   const uint8_t fan_index = tokens[0] > 0 && tokens[0] <= number_of_fans ? tokens[0] - 1 : 0;
-    //   for (uint8_t token_index = 1; token_index < tokens_count; token_index++) {
-    //     const int8_t target_pwm = tokens[token_index] > 255 ? -1 : tokens[token_index] < 100 ? tokens[token_index]
-    //                                                                                          : 100;
-    //     fans[fan_index].hysteresys_curve[token_index - 1] = target_pwm;
-    //     if (token_index == 8) {
-    //       break;
-    //     }
-    //   }
-
-    //   fans[fan_index].use_hysteresys_curve = true;
-    // }
-
     fan_pwm_apply_updated_values();
-
     return chars_count;
   }
 
@@ -965,25 +848,6 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_fan_alert_enable)) {
       return ERR_INVALID_PARAMETERS;
     }
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count < 2) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   static const uint8_t number_of_fans = sizeof(fans)/sizeof(fans[0]);
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-    //   const uint8_t fan_index = (tokens[0] > 0 && tokens[0] <= number_of_fans) ? tokens[0] - 1 : 0;
-    //   fans[fan_index].alert_rpm = tokens[1];
-    //   fans[fan_index].alert_trigger = 0;
-
-    //   if (tokens_count > 2) {
-    //     fans[fan_index].alert_threshold = tokens[2];
-    //   } else {
-    //     fans[fan_index].alert_threshold = 4;
-    //   }
-    // }
-
     return chars_count;
   }
 
@@ -997,27 +861,6 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_temperature_reference)) {
       return ERR_INVALID_PARAMETERS;
     }
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count < 2) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   const uint8_t max_number_of_sensors = (sizeof(temps) / sizeof(temps[0]));
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-    //   const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-
-    //   if (temps[sensor_index].current_temp == SENSOR_NOT_PRESENT) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   if (tokens[1] > 50) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   temps[sensor_index].correction = tokens[1] - temps[sensor_index].current_temp;
-    // }
-
     return chars_count;
   }
 
@@ -1025,25 +868,6 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_temperature_alert_enable)) {
       return ERR_INVALID_PARAMETERS;
     }
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count < 2) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   const uint8_t max_number_of_sensors = (sizeof(temps) / sizeof(temps[0]));
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-    //   const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-    //   temps[sensor_index].alert_temp = tokens[1] > 255 ? 0 : tokens[1];
-    //   temps[sensor_index].alert_trigger = 0;
-
-    //   if (tokens_count > 2) {
-    //     temps[sensor_index].alert_threshold = tokens[2];
-    //   } else {
-    //     temps[sensor_index].alert_threshold = 4;
-    //   }
-    // }
-
     return chars_count;
   }
 
@@ -1051,18 +875,6 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_voltage_reference)) {
       return ERR_INVALID_PARAMETERS;
     }
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count < 2) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-
-    //   _disk_voltage_12v_kf = (tokens[0] / (tokens[0] < 20 ? 1.0F : tokens[0] < 200 ? 10.0F : 100.0F)) / 1024.0F;
-    //   _disk_voltage_5v_kf = (tokens[1] / (tokens[1] < 20 ? 1.0F : tokens[1] < 200 ? 10.0F : 100.0F)) / 1024.0F;
-    // }
-
     return chars_count;
   }
 
@@ -1070,29 +882,6 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_external_sensor_set)) {
       return ERR_INVALID_PARAMETERS;
     }
-    // for (uint8_t token_chunk_index = 0; token_chunk_index < token_chunks_count; token_chunk_index++) {
-    //   const uint8_t tokens_count = token_chunks[token_chunk_index].count;
-    //   if (tokens_count < 2) {
-    //     return ERR_INVALID_PARAMETERS;
-    //   }
-
-    //   const uint16_t *tokens = token_chunks[token_chunk_index].tokens;
-
-    //   if (cmd == CMD_EXTERNAL_SENSOR_SET_LOAD) {
-    //     const uint8_t max_number_of_sensors = (sizeof(ext_loads) / sizeof(ext_loads[0]));
-    //     const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-    //     ext_loads[sensor_index] = tokens[1] > 255 ? SENSOR_NOT_PRESENT : tokens[1] < 100 ? tokens[1] : 100;
-    //   } else if (cmd == CMD_EXTERNAL_SENSOR_SET_FANS) {
-    //     const uint8_t max_number_of_sensors = (sizeof(ext_fans) / sizeof(ext_fans[0]));
-    //     const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-    //     ext_fans[sensor_index] = tokens[1] > 8000 ? SENSOR_NOT_PRESENT : tokens[1];
-    //   } else if (cmd == CMD_EXTERNAL_SENSOR_SET_TEMP) {
-    //     const uint8_t max_number_of_sensors = (sizeof(ext_temps) / sizeof(ext_temps[0]));
-    //     const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-    //     ext_temps[sensor_index] = tokens[1] > 255 ? SENSOR_NOT_PRESENT : tokens[1] < 127 ? tokens[1] : 127;
-    //   }
-    // }
-
     return chars_count;
   }
 
@@ -1923,7 +1712,7 @@ void melody_play() {
       if (i > _melody_note_playing_index) {
         tone_pwm(_melody_notes[i].frequency, _melody_notes[i].length);
         _melody_note_playing_index = i;
-        _is_melody_quick_playing = _melody_notes[i].length < 40;
+        _is_melody_quick_playing = _melody_notes[i].length < 50;
       } else {
         prev_note_end_play_time = this_note_end_play_time;
         continue;
@@ -2230,17 +2019,17 @@ void display_page_hdd_cage_voltage() {
     return;
   }
 
-  char line2[] = "12v:00.0  5v:0.0";
+  char line2[] = "00.00v  /  0.00v";
 
   uint8_t int_part_12v = (uint8_t)_disk_voltage_12v;
-  uint8_t dec_part_12v = (_disk_voltage_12v - (float)int_part_12v) * 10;
-  itoar(int_part_12v, &line2[5]);
-  itoar(dec_part_12v, &line2[7]);
+  uint8_t dec_part_12v = (_disk_voltage_12v - (float)int_part_12v) * 100;
+  itoar(int_part_12v, &line2[1]);
+  itoar(dec_part_12v, &line2[4]);
 
   uint8_t int_part_5v = (uint8_t)_disk_voltage_5v;
-  uint8_t dec_part_5v = (_disk_voltage_5v - (float)int_part_5v) * 10;
-  itoar(int_part_5v, &line2[13]);
-  itoar(dec_part_5v, &line2[15]);
+  uint8_t dec_part_5v = (_disk_voltage_5v - (float)int_part_5v) * 100;
+  itoar(int_part_5v, &line2[11]);
+  itoar(dec_part_5v, &line2[14]);
 
   lcd_send_line(0, F("HDD cage voltage"));
   lcd_send_line(1, line2);
@@ -2338,8 +2127,8 @@ bool display_message(const __FlashStringHelper *s1, const __FlashStringHelper *s
   char line1[DISPLAY_WIDTH + 1];
   char line2[DISPLAY_WIDTH + 1];
 
-  strcopy(line1, s1, DISPLAY_WIDTH);
-  strcopy(line2, s2, DISPLAY_WIDTH);
+  line1[strcopy(line1, s1, DISPLAY_WIDTH)] = '\0';
+  line2[strcopy(line2, s2, DISPLAY_WIDTH)] = '\0';
 
   return display_message(line1, line2, is_alert);
 }
@@ -2413,31 +2202,36 @@ void display_wait_screen() {
     return;
   }
 
-  const uint16_t elapsed_seconds_in_current_status = (elapsed_time - _last_status_change_time) / 1000;
-
   if ((_wait_status & WAIT_STATUS_MASK_REBOOT) == WAIT_STATUS_MASK_REBOOT) {
     strcopy(line1, F("Rebooting..."), DISPLAY_WIDTH);
   } else if ((_wait_status & WAIT_STATUS_MASK_SHUTDOWN) == WAIT_STATUS_MASK_SHUTDOWN) {
     strcopy(line1, F("Shutdown..."), DISPLAY_WIDTH);
   }
 
-  itoar(elapsed_seconds_in_current_status, &line1[15]);
-
   if (_wait_status == WAIT_STATUS_BOOT_PHASE1) {
     strcopy(line2, F("Loading Kernel"), DISPLAY_WIDTH);
   } else if (_wait_status == WAIT_STATUS_BOOT_PHASE2) {
     strcopy(line2, F("Loading System"), DISPLAY_WIDTH);
-  } else if (_wait_status == WAIT_STATUS_BOOT_PHASEN || _wait_status == WAIT_STATUS_REBOOT_PHASE1 || _wait_status == WAIT_STATUS_SHUTDOWN_PHASE1) {
+  } else if (_wait_status == WAIT_STATUS_BOOT_PHASEN) {
     if (display_page_texts[0] && display_page_texts[0][0]) {
       strcopy(line2, &display_page_texts[0][0], DISPLAY_WIDTH);
     } else {
       strcopy(line2, F("Getting Ready"), DISPLAY_WIDTH);
+    }    
+  } else if (_wait_status == WAIT_STATUS_REBOOT_PHASE1 || _wait_status == WAIT_STATUS_SHUTDOWN_PHASE1) {
+    if (display_page_texts[0] && display_page_texts[0][0]) {
+      strcopy(line2, &display_page_texts[0][0], DISPLAY_WIDTH);
+    } else {
+      strcopy(line2, F("Stopping System"), DISPLAY_WIDTH);
     }
   } else if (_wait_status == WAIT_STATUS_REBOOT_PHASE2) {
     strcopy(line2, F("Reloading System"), DISPLAY_WIDTH);
   } else if (_wait_status == WAIT_STATUS_SHUTDOWN_PHASE2) {
     strcopy(line2, F("Bye-bye"), DISPLAY_WIDTH);
   }
+
+  const uint16_t elapsed_seconds_in_current_status = (elapsed_time - _last_status_change_time) / 1000;
+  itoar(elapsed_seconds_in_current_status, &line1[15]);
 
   lcd_send_line(0, line1);
   lcd_send_line(1, line2);
@@ -3103,34 +2897,36 @@ uint8_t strl(const char *s) {
   return len;
 }
 
-void strcopy(char *dst, const char *src, const uint8_t max_length) {
+uint8_t strcopy(char *dst, const char *src, const uint8_t max_length) {
   if (dst == nullptr || src == nullptr || max_length == 0) {
-    return;
+    return 0;
   }
 
   for (uint8_t i = 0; i < max_length; i++) {
-    dst[i] = src[i];
-    if (src[i] == 0) {
-      break;
+    if (src[i] == '\0') {
+      return i;
     }
+    dst[i] = src[i];
   }
+
+  return max_length;
 }
 
-void strcopy(char *dst, const __FlashStringHelper *src, uint8_t max_length) {
+uint8_t strcopy(char *dst, const __FlashStringHelper *src, uint8_t max_length) {
   if (dst == nullptr || src == nullptr || max_length == 0) {
-    return;
+    return 0;
   }
 
   const char *flash_ptr = reinterpret_cast<const char*>(src);
-
-  uint8_t i = 0;
-  for (; i < max_length - 1; ++i) {
+  for (uint8_t i = 0; i < max_length; i++) {
     char c = pgm_read_byte(flash_ptr + i);
-    dst[i] = c;
     if (c == '\0') {
-      break;
+      return i;
     }
+    dst[i] = c;
   }
+
+  return max_length;
 }
 
 void itoar(int val, char *end) {
