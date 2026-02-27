@@ -1,3 +1,7 @@
+# Wiring
+
+https://app.cirkitdesigner.com/project/63c4cfeb-4659-44b3-8fcc-0739deb1d74b
+
 # Supervisor Firmware - Serial Command Reference
 
 ## Overview
