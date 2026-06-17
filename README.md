@@ -189,7 +189,7 @@ Sets the target speed (duty cycle percentage) for a fan.
 | Parameter | Position | Type | Description |
 |---|---|---|---|
 | `fan_index` | 1st | 1-2 | Fan number (1 = HDD fan, 2 = LSI fan) |
-| `speed` | 2nd | 0-100 | Target speed as percentage (>255 = disable fan) |
+| `speed` | 2nd | 0-100 | Target speed as percentage (>=255 = disable fan) |
 
 Supports multiple groups for setting several fans at once. Disables hysteresis curve for the specified fan.
 
@@ -232,12 +232,16 @@ Defines a temperature-to-speed hysteresis curve for a fan. The curve maps temper
 | Parameter | Position | Type | Description |
 |---|---|---|---|
 | `fan_index` | 1st | 1-2 | Fan number |
-| `speed_10C` | 2nd | 0-100 | Speed at <=10 C (>255 = fan off) |
-| `speed_20C` | 3rd | 0-100 | Speed at 20 C |
-| `speed_30C` | 4th | 0-100 | Speed at 30 C |
-| ... | ... | ... | ... up to 8 curve points |
+| `speed_at_10C` | 2nd | 0-100 | Speed at <=10 C (>=255 = fan off) |
+| `speed_at_20C` | 3rd | 0-100 | Speed at 20 C |
+| `speed_at_30C` | 4th | 0-100 | Speed at 30 C |
+| `speed_at_40C` | 5th | 0-100 | Speed at 40 C |
+| `speed_at_50C` | 6th | 0-100 | Speed at 50 C |
+| `speed_at_60C` | 7th | 0-100 | Speed at 60 C |
+| `speed_at_70C` | 8th | 0-100 | Speed at 70 C |
+| `speed_at_80C` | 9th | 0-100 | Speed at 80 C |
 
-Temperatures >=90 C force 100% speed. Enables automatic hysteresis mode for the fan.
+**Note:** Temperature >=90 C will always force 100% speed no matter of the curve set.
 
 **Example:** `FH1,0,10,30,50,70,85,95,100` — Fan 1 curve from off at 10 C to full at 80 C.
 
@@ -401,7 +405,7 @@ Enables a high-temperature alert for an internal sensor.
 | Parameter | Position | Type | Description |
 |---|---|---|---|
 | `sensor_index` | 1st | 1-2 | Sensor number (1 = HDD, 2 = LSI) |
-| `alert_temp` | 2nd | 0-255 | Temperature threshold in C (>255 = disable, 0 = disable) |
+| `alert_temp` | 2nd | 0-254 | Temperature threshold in C (>=255 = disable, 0 = disable) |
 | `threshold` | 3rd | 1-255 | *(Optional, default: 4)* Consecutive readings before alert |
 
 **Example:** `TA1,55,3` — Alert if HDD sensor exceeds 55 C for 3 consecutive checks.
