@@ -432,7 +432,7 @@ These commands feed host-system sensor data into the supervisor for display on t
 | Parameter | Position | Type | Description |
 |---|---|---|---|
 | `sensor_index` | 1st | 1-10 | Sensor (1=CPU, 2=MB, 3=RAM, 4=LAN up, 5=LAN down, 6-9=HDD1-4) |
-| `load` | 2nd | 0-100 | Load percentage (>255 = not present) |
+| `load` | 2nd | 0-100 | Load percentage (>=255 = not present) |
 
 Supports multiple groups.
 
@@ -445,7 +445,7 @@ Supports multiple groups.
 | Parameter | Position | Type | Description |
 |---|---|---|---|
 | `sensor_index` | 1st | 1-2 | Sensor (1=CPU fan, 2=Motherboard fan) |
-| `rpm` | 2nd | 0-8000 | Fan speed in RPM (>8000 = not present) |
+| `rpm` | 2nd | 0-8000 | Fan speed in RPM (>=8000 = not present) |
 
 **Example:** `EF1,1200` — CPU fan at 1200 RPM.
 
@@ -456,7 +456,7 @@ Supports multiple groups.
 | Parameter | Position | Type | Description |
 |---|---|---|---|
 | `sensor_index` | 1st | 1-10 | Sensor (1=CPU, 2=MB, 3=RAM, 4=LAN up, 5=LAN down, 6-9=HDD1-4) |
-| `temperature` | 2nd | 0-127 | Temperature in C (>255 = not present) |
+| `temperature` | 2nd | 0-127 | Temperature in C (>=255 = not present) |
 
 **Example:** `ET1,62|6,38|7,40` — CPU 62 C, HDD1 38 C, HDD2 40 C.
 
