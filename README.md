@@ -22,6 +22,15 @@ Errors produce an audible error sound on the buzzer.
 
 ## System Commands
 
+### `~F` — Enter flash (programming) mode
+
+Stops all supervisor code. Microcontroller enters flashing mode. In most cases it can be successfully flashed after this command without the need for manual hardware reset.
+
+| Parameters | None |
+|---|---|
+
+---
+
 ### `~R` — Reset
 
 Triggers a hardware watchdog reset (reboots the microcontroller).
