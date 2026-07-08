@@ -198,7 +198,7 @@ Sets the target speed (duty cycle percentage) for a fan.
 | Parameter | Position | Type | Description |
 |---|---|---|---|
 | `fan_index` | 1st | 1-2 | Fan number (1 = HDD fan, 2 = LSI fan) |
-| `speed` | 2nd | 0-100 | Target speed as percentage (>=255 = disable fan) |
+| `speed` | 2nd | 0-100 | Target speed as percentage (=0 = fan off) |
 
 Supports multiple groups for setting several fans at once. Disables hysteresis curve for the specified fan.
 
@@ -241,7 +241,7 @@ Defines a temperature-to-speed hysteresis curve for a fan. The curve maps temper
 | Parameter | Position | Type | Description |
 |---|---|---|---|
 | `fan_index` | 1st | 1-2 | Fan number |
-| `speed_at_10C` | 2nd | 0-100 | Speed at <=10 C (>=255 = fan off) |
+| `speed_at_10C` | 2nd | 0-100 | Speed at <=10 C (=0 = fan off) |
 | `speed_at_20C` | 3rd | 0-100 | Speed at 20 C |
 | `speed_at_30C` | 4th | 0-100 | Speed at 30 C |
 | `speed_at_40C` | 5th | 0-100 | Speed at 40 C |
@@ -468,7 +468,7 @@ Supports multiple groups.
 
 | Parameter | Position | Type | Description |
 |---|---|---|---|
-| `sensor_index` | 1st | 1-10 | Sensor (1=CPU, 2=MB, 3=RAM, 4=LAN up, 5=LAN down, 6-9=HDD1-4) |
+| `sensor_index` | 1st | 1-10 | Sensor (1=CPU, 2=MB, 3=RAM, 4=LAN up, 5=LAN down, 6-9=HDD1-4, 101=override HDD cage sensor value, 101=override LSI card sensor value) |
 | `temperature` | 2nd | 0-127 | Temperature in C (>=255 = not present) |
 
 **Example:** `ET1,62|6,38|7,40` — CPU 62 C, HDD1 38 C, HDD2 40 C.
