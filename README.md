@@ -468,7 +468,7 @@ Supports multiple groups.
 
 | Parameter | Position | Type | Description |
 |---|---|---|---|
-| `sensor_index` | 1st | 1-10 | Sensor (1=CPU, 2=MB, 3=RAM, 4=LAN up, 5=LAN down, 6-9=HDD1-4, 101=override HDD cage sensor value, 101=override LSI card sensor value) |
+| `sensor_index` | 1st | 1-10 | Sensor (1=CPU, 2=MB, 3=RAM, 4=LAN up, 5=LAN down, 6-9=HDD1-4, 101=override HDD cage sensor value, 102=override LSI card sensor value) |
 | `temperature` | 2nd | 0-127 | Temperature in C (>=255 = not present) |
 
 **Example:** `ET1,62|6,38|7,40` — CPU 62 C, HDD1 38 C, HDD2 40 C.
