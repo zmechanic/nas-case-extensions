@@ -528,6 +528,8 @@ Sets a temperature threshold for disk overheat alerts (uses external HDD tempera
 ### `HF` — Enable Disk Temperature to Fan Speed Link
 
 Enables or disables automatic fan speed adjustment based on the highest disk temperature (uses the hysteresis curve of fan 1).
+This essentially overrides internal HDD cage temperature sensor value with maximum among the individual HDD temperatures reported as external sensor with `ET` command.
+This setting only affects fan speed decision. The HDD cage temperature value will still be displayed as reported by an internal sensor.
 
 | Parameter | Type | Description |
 |---|---|---|
