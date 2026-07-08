@@ -58,7 +58,7 @@ static const uint16_t CMD_DISPLAY_ALERT = ('D' << 8) | 'A';
 static const uint16_t CMD_DISPLAY_MESSAGE = ('D' << 8) | 'M';
 static const uint16_t CMD_DISPLAY_BRIGHTNESS = ('D' << 8) | 'B';
 static const uint16_t CMD_TEMPERATURE_SCALE_FAHRENHEIT_SET = ('T' << 8) | 'F';
-static const uint16_t CMD_TEMPERATURE_REFERENCE = ('T' << 8) | 'R';
+static const uint16_t CMD_TEMPERATURE_SENSOR_INDEX_SWAP = ('T' << 8) | 'I';
 static const uint16_t CMD_TEMPERATURE_ALERT_ENABLE = ('T' << 8) | 'A';
 static const uint16_t CMD_VOLTAGE_REFERENCE = ('V' << 8) | 'R';
 static const uint16_t CMD_EXTERNAL_SENSOR_SET_LOAD = ('E' << 8) | 'L';
@@ -69,6 +69,8 @@ static const uint16_t CMD_EXTERNAL_SENSOR_SET_ARRAY_STATUS = ('E' << 8) | 'A';
 static const uint16_t CMD_DISK_SHUTDOWN_DELAY_SET = ('H' << 8) | 'D';
 static const uint16_t CMD_DISK_TEMPERATURE_ALERT_SET = ('H' << 8) | 'A';
 static const uint16_t CMD_DISK_TEMPERATURE_FAN_HYSTERESYS_LINK_SET = ('H' << 8) | 'F';
+
+typedef bool (*cmd_delegate_fn)(const uint16_t cmd, const uint8_t token_chunk_index, const uint16_t *tokens, const uint8_t tokens_count);
 
 typedef enum {
   WAIT_STATUS_MASK_BOOT = 1 << 3,
@@ -150,6 +152,16 @@ typedef enum {
 } ExtFanSensorIndex;
 
 typedef enum {
+  EXT_TEMP_SENSOR_INDEX_CPU = EXT_SENSOR_INDEX_CPU,
+  EXT_TEMP_SENSOR_INDEX_MOTHERBOARD = EXT_SENSOR_INDEX_MOTHERBOARD,
+  EXT_TEMP_SENSOR_INDEX_HDD1 = EXT_SENSOR_INDEX_HDD1,
+  EXT_TEMP_SENSOR_INDEX_HDD2 = EXT_SENSOR_INDEX_HDD2,
+  EXT_TEMP_SENSOR_INDEX_HDD3 = EXT_SENSOR_INDEX_HDD3,
+  EXT_TEMP_SENSOR_INDEX_HDD4 = EXT_SENSOR_INDEX_HDD4,
+  EXT_TEMP_SENSOR_INDEX__DO_NOT_REMOVE
+} ExtTempSensorIndex;
+
+typedef enum {
   RGB_LED_USER_MODE_NONE = 0,
   RGB_LED_USER_MODE_CONSTANT_COLOR,
   RGB_LED_USER_MODE_BREATHING_COLOR
@@ -161,6 +173,11 @@ typedef enum {
   RGB_LED_STATUS_INDEX_LAST = RGB_LED_STATUS_INDEX_NETWORK,
   RGB_LED_STATUS_INDEX__DO_NOT_REMOVE
 } RgbLedStatusIndex;
+
+typedef enum {
+  TEMP_SENSOR_ADDR_BLANK = 0,
+  TEMP_SENSOR_ADDR_OVERRIDE = 255,
+} TempSensorAddressCode;
 
 struct TokenChunk {
   uint16_t tokens[8];
@@ -185,18 +202,17 @@ struct FanCapture {
   uint16_t capture_buffer[8];
   uint8_t min_duty_cycle;
   uint8_t max_duty_cycle;
-  int8_t req_duty_percentage;  // fan speed in 0..100% of PWM between `min_duty_cycle` and `max_duty_cycle` (set negative value to disable fan)
+  uint8_t req_duty_percentage;  // fan speed in 1..100% of PWM between `min_duty_cycle` and `max_duty_cycle` (set to 0 value to disable fan)
   uint16_t alert_rpm;
   uint8_t alert_threshold;
   uint8_t alert_trigger;
   int16_t current_rpm;
   bool use_hysteresys_curve;
-  int8_t hysteresys_curve[8];
+  uint8_t hysteresys_curve[8];
 };
 
 struct TempCapture {
   DeviceAddress address;
-  int8_t correction;
   int8_t current_temp;
   uint8_t alert_temp;
   uint8_t alert_threshold;
@@ -277,6 +293,10 @@ static uint32_t _current_color_hash = 0;
 static RgbColor _rgb_led_colors_new_set[sizeof(_rgb_led_colors) / sizeof(_rgb_led_colors[0])];
 static RgbLedUserMode _rgb_led_colors_new_mode = RGB_LED_USER_MODE_NONE;
 
+static RgbColor _opti_led_1;
+static RgbColor _opti_led_3;
+static RgbColor _opti_led_4;
+
 static uint8_t _lcd_brightness_pwm = 255;
 static uint8_t _lcd_brightness_current = 0;
 static uint8_t _lcd_brightness_target = 255;
@@ -326,20 +346,19 @@ static int8_t _was_array_started_led_code = SENSOR_NOT_PRESENT;
 static FanCapture fans[INT_FAN_SENSOR_INDEX__DO_NOT_REMOVE];
 static TempCapture temps[INT_TEMP_SENSOR_INDEX__DO_NOT_REMOVE];
 static int16_t ext_fans[EXT_FAN_SENSOR_INDEX__DO_NOT_REMOVE];
-static int8_t ext_temps[EXT_SENSOR_INDEX__DO_NOT_REMOVE];
+static int8_t ext_temps[EXT_TEMP_SENSOR_INDEX__DO_NOT_REMOVE];
 static int8_t ext_loads[EXT_SENSOR_INDEX__DO_NOT_REMOVE];
 
 static char display_page_texts[DISPLAY_PAGE_TYPE_CUSTOM_PAGE_LAST + 1][DISPLAY_WIDTH * DISPLAY_HEIGHT];
 static uint8_t display_page_map[DISPLAY_PAGE_TYPE__DO_NOT_REMOVE];
 
 static uint32_t _last_check_time_1o4_second_counter = 0;
+static uint32_t _last_round_time_1o4_second_counter = 0;
 static unsigned long _last_check_time_1o4_second = 0;
 
 static OneWire oneWire(ONEWIRE_PIN);
 static DallasTemperature tempSensors(&oneWire);
 static Waveshare_LCD1602 lcd(16, 2);
-
-typedef bool (*cmd_delegate_fn)(const uint16_t cmd, const uint8_t token_chunk_index, const uint16_t *tokens, const uint8_t tokens_count);
 
 void setup() {
   wdt_disable();
@@ -410,9 +429,14 @@ void setup() {
   pinMode(LED_BUILTIN_TX, INPUT);
   pinMode(LED_BUILTIN_RX, INPUT);
 
+  // Activate temperature sensors
+  temp_sensors_init();
   temp_sensors_enable();
+
+  // Enable fan RPM sense
   fan_pin_interrupt_enable();
 
+  // GLobal interrupts enabled
   interrupts();
 
   wdt_enable(WDTO_500MS);
@@ -496,8 +520,15 @@ void loop() {
 
     fans_rpm_update();
   }
-
+  
   // *** LOW PRIORITY CODE STARTS HERE ***
+  if (_last_round_time_1o4_second_counter == _last_check_time_1o4_second_counter) {
+    // as the counter is very low granular, the logic will fire multiple times on the same counter value
+    // we remember counter value when updates were previously ran to prevent repetetive runs of the same
+    return;
+  }
+
+  _last_round_time_1o4_second_counter = _last_check_time_1o4_second_counter;
   const uint32_t second_1_remainder = _last_check_time_1o4_second_counter % 4;
   const uint32_t second_2_remainder = _last_check_time_1o4_second_counter % 8;
 
@@ -526,7 +557,11 @@ void loop() {
 
   // Every 2 seconds updates (remainders 3 and 7 are the only those ones that don't overlap with remainders 0, 1, 2 on 1 second interval)
   if (second_2_remainder == 3) {
-    temp_sensors_update();
+    if (temps[0].address[0] == TEMP_SENSOR_ADDR_BLANK) {
+      temp_sensors_enable();
+    } else {
+      temp_sensors_update();
+    }
   } else if (second_2_remainder == 7) {
     check_for_alerts();
   }
@@ -553,13 +588,13 @@ void check_for_alerts() {
 
   if (_disk_temperature_alert) {
     uint8_t disk_number= 0;
-    if (ext_temps[EXT_SENSOR_INDEX_HDD1] >= _disk_temperature_alert) {
+    if (ext_temps[EXT_TEMP_SENSOR_INDEX_HDD1] >= _disk_temperature_alert) {
       disk_number = 1;
-    } else if (ext_temps[EXT_SENSOR_INDEX_HDD2] >= _disk_temperature_alert) {
+    } else if (ext_temps[EXT_TEMP_SENSOR_INDEX_HDD2] >= _disk_temperature_alert) {
       disk_number = 2;
-    } else if (ext_temps[EXT_SENSOR_INDEX_HDD3] >= _disk_temperature_alert) {
+    } else if (ext_temps[EXT_TEMP_SENSOR_INDEX_HDD3] >= _disk_temperature_alert) {
       disk_number = 3;
-    } else if (ext_temps[EXT_SENSOR_INDEX_HDD4] >= _disk_temperature_alert) {
+    } else if (ext_temps[EXT_TEMP_SENSOR_INDEX_HDD4] >= _disk_temperature_alert) {
       disk_number = 4;
     }
 
@@ -608,13 +643,13 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
 
   if (cmd == CMD_FLASH) {
     change_wait_status(WAIT_STATUS_FLASH_READY);
-    wdt_reset();
     wdt_disable();
+    wdt_reset();
     noInterrupts();
     Serial.end();
     rgb_led_reset_color();
-    display_message(F("FLASH"), F("READY"), false);
-    tone_pwm(800, 200);
+    display_message(F("FLASH  WRITE"), F("MODE"), false);
+    tone_pwm(800, 1200);
     return 0;
   }
 
@@ -747,14 +782,8 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     _rgb_led_colors_user_mode = _rgb_led_colors_new_mode;
 
     for (uint8_t i = 0; i < sizeof(_rgb_led_colors_user_set) / sizeof(_rgb_led_colors_user_set[0]); i++) {
-      if (_rgb_led_colors_new_set[i].r != _rgb_led_colors_user_set[i].r ||
-          _rgb_led_colors_new_set[i].g != _rgb_led_colors_user_set[i].g ||
-          _rgb_led_colors_new_set[i].b != _rgb_led_colors_user_set[i].b ||
-          _rgb_led_colors_new_set[i].length != _rgb_led_colors_user_set[i].length) {
-        _rgb_led_colors_user_set[i].r = _rgb_led_colors_new_set[i].r;
-        _rgb_led_colors_user_set[i].g = _rgb_led_colors_new_set[i].g;
-        _rgb_led_colors_user_set[i].b = _rgb_led_colors_new_set[i].b;
-        _rgb_led_colors_user_set[i].length = _rgb_led_colors_new_set[i].length;
+      if (!rgb_cmp4(&_rgb_led_colors_new_set[i], &_rgb_led_colors_user_set[i])) {
+        _rgb_led_colors_user_set[i] = RgbColor { _rgb_led_colors_new_set[i].r, _rgb_led_colors_new_set[i].g, _rgb_led_colors_new_set[i].b, _rgb_led_colors_new_set[i].length };
         is_different_color = true;
       }
     }
@@ -777,14 +806,8 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     bool is_different_color = false;
 
     for (uint8_t i = 0; i < sizeof(_rgb_led_status_user_set) / sizeof(_rgb_led_status_user_set[0]); i++) {
-      if (_rgb_led_colors_new_set[i].r != _rgb_led_status_user_set[i].r ||
-          _rgb_led_colors_new_set[i].g != _rgb_led_status_user_set[i].g ||
-          _rgb_led_colors_new_set[i].b != _rgb_led_status_user_set[i].b ||
-          _rgb_led_colors_new_set[i].length != _rgb_led_status_user_set[i].length) {
-        _rgb_led_status_user_set[i].r = _rgb_led_colors_new_set[i].r;
-        _rgb_led_status_user_set[i].g = _rgb_led_colors_new_set[i].g;
-        _rgb_led_status_user_set[i].b = _rgb_led_colors_new_set[i].b;
-        _rgb_led_status_user_set[i].length = _rgb_led_colors_new_set[i].length;
+      if (!rgb_cmp4(&_rgb_led_colors_new_set[i], &_rgb_led_status_user_set[i])) {
+        _rgb_led_status_user_set[i] = RgbColor { _rgb_led_colors_new_set[i].r, _rgb_led_colors_new_set[i].g, _rgb_led_colors_new_set[i].b, _rgb_led_colors_new_set[i].length };
         is_different_color = true;
       }
     }
@@ -915,8 +938,8 @@ int8_t process_command(const uint16_t cmd, const uint8_t payload[], const uint8_
     return chars_count;
   }
 
-  if (cmd == CMD_TEMPERATURE_REFERENCE) {
-    if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_temperature_reference)) {
+  if (cmd == CMD_TEMPERATURE_SENSOR_INDEX_SWAP) {
+    if (!process_token_chunks(cmd, token_chunks, token_chunks_count, cmd_temperature_sensor_index_swap)) {
       return ERR_INVALID_PARAMETERS;
     }
     return chars_count;
@@ -987,11 +1010,7 @@ bool cmd_rgb_led_color_user_set(const uint16_t cmd, const uint8_t token_chunk_in
     return false;
   }
 
-  RgbColor *color = &_rgb_led_colors_new_set[token_chunk_index];
-  color->r = tokens[0];
-  color->g = tokens[1];
-  color->b = tokens[2];
-  color->length = tokens_count > 3 ? tokens[3] : 0;
+  _rgb_led_colors_new_set[token_chunk_index] = RgbColor { (uint8_t)tokens[0], (uint8_t)tokens[1], (uint8_t)tokens[2], tokens_count > 3 ? tokens[3] : 0 };
 
   if (cmd == CMD_RGB_LED_BREATH_SET) {
     _rgb_led_colors_new_mode = RGB_LED_USER_MODE_BREATHING_COLOR;
@@ -1007,27 +1026,22 @@ bool cmd_rgb_led_status_color_set([[maybe_unused]] const uint16_t cmd, const uin
     return false;
   }
 
-  if (tokens_count == 3) {
-    RgbColor *color = &_rgb_led_colors_new_set[token_chunk_index];
-    color->r = tokens[0];
-    color->g = tokens[1];
-    color->b = tokens[2];
-    color->length = 1;
-    return true;
-  }
-  
   if (tokens_count == 1 && tokens[0] == 0) {
     return true;
   }
 
+  if (tokens_count == 3) {
+    _rgb_led_colors_new_set[token_chunk_index] = RgbColor { (uint8_t)tokens[0], (uint8_t)tokens[1], (uint8_t)tokens[2], 1 };
+    return true;
+  }
+  
   return false;
 }
 
 bool cmd_fan_speed_set([[maybe_unused]] const uint16_t cmd, [[maybe_unused]] const uint8_t token_chunk_index, const uint16_t *tokens, [[maybe_unused]] const uint8_t tokens_count) {
   static const uint8_t number_of_fans = sizeof(fans) / sizeof(fans[0]);
   const uint8_t fan_index = (tokens[0] > 0 && tokens[0] <= number_of_fans) ? tokens[0] - 1 : 0;
-  const int8_t target_pwm = tokens[1] >= 255 ? -1 : tokens[1] < 100 ? tokens[1]
-                                                                   : 100;
+  const int8_t target_pwm = tokens[1] < 100 ? tokens[1] : 100;
 
   fans[fan_index].req_duty_percentage = target_pwm;
   fans[fan_index].use_hysteresys_curve = false;
@@ -1059,13 +1073,14 @@ bool cmd_fan_hysteresys_set([[maybe_unused]] const uint16_t cmd, [[maybe_unused]
   static const uint8_t number_of_fans = sizeof(fans)/sizeof(fans[0]);
   const uint8_t fan_index = tokens[0] > 0 && tokens[0] <= number_of_fans ? tokens[0] - 1 : 0;
   for (uint8_t token_index = 1; token_index < tokens_count; token_index++) {
-    const int8_t target_pwm = tokens[token_index] >= 255 ? -1 : tokens[token_index] < 100 ? tokens[token_index]
-                                                                                          : 100;
+    const int8_t target_pwm = tokens[token_index] < 100 ? tokens[token_index] : 100;
     fans[fan_index].hysteresys_curve[token_index - 1] = target_pwm;
     if (token_index == 8) {
       break;
     }
   }
+
+  fans[fan_index].use_hysteresys_curve = true;
 
   return true;
 }
@@ -1085,18 +1100,25 @@ bool cmd_fan_alert_enable([[maybe_unused]] const uint16_t cmd, [[maybe_unused]] 
   return true;
 }
 
-bool cmd_temperature_reference([[maybe_unused]] const uint16_t cmd, [[maybe_unused]] const uint8_t token_chunk_index, const uint16_t *tokens, [[maybe_unused]] const uint8_t tokens_count) {
+bool cmd_temperature_sensor_index_swap([[maybe_unused]] const uint16_t cmd, [[maybe_unused]] const uint8_t token_chunk_index, const uint16_t *tokens, const uint8_t tokens_count) {
   const uint8_t max_number_of_sensors = (sizeof(temps) / sizeof(temps[0]));
-  const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-  if (temps[sensor_index].current_temp == SENSOR_NOT_PRESENT) {
+
+  if (tokens_count != 2) {
     return false;
   }
 
-  if (tokens[1] > 50) {
+  if (tokens[0] == 0 || tokens[1] == 0 || tokens[0] > max_number_of_sensors || tokens[1] > max_number_of_sensors) {
     return false;
   }
 
-  temps[sensor_index].correction = tokens[1] - temps[sensor_index].current_temp;
+  const uint8_t sensor_index_src = tokens[0] - 1;
+  const uint8_t sensor_index_dst = tokens[1] - 1;
+
+  for (uint8_t i = 0; i < sizeof(temps[sensor_index_dst].address) / sizeof(temps[sensor_index_dst].address[0]); i++) {
+    const uint8_t temp = temps[sensor_index_dst].address[i];
+    temps[sensor_index_dst].address[i] = temps[sensor_index_src].address[i];
+    temps[sensor_index_src].address[i] = temp;
+  }
 
   return true;
 }
@@ -1124,24 +1146,35 @@ bool cmd_voltage_reference([[maybe_unused]] const uint16_t cmd, [[maybe_unused]]
 }
 
 bool cmd_external_sensor_set(const uint16_t cmd, [[maybe_unused]] const uint8_t token_chunk_index, const uint16_t *tokens, [[maybe_unused]] const uint8_t tokens_count) {
+  const uint16_t si = tokens[0];
+  const uint16_t sv = tokens[1];
+
   if (cmd == CMD_EXTERNAL_SENSOR_SET_LOAD) {
     const uint8_t max_number_of_sensors = (sizeof(ext_loads) / sizeof(ext_loads[0]));
-    const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-    ext_loads[sensor_index] = tokens[1] >= 255 ? SENSOR_NOT_PRESENT : tokens[1] < 100 ? tokens[1] : 100;
+    const uint8_t sensor_index = (si > 0 && si <= max_number_of_sensors) ? si - 1 : 0;
+    ext_loads[sensor_index] = sv >= 255 ? SENSOR_NOT_PRESENT : sv < 100 ? sv : 100;
     return true;
   }
   
   if (cmd == CMD_EXTERNAL_SENSOR_SET_FANS) {
     const uint8_t max_number_of_sensors = (sizeof(ext_fans) / sizeof(ext_fans[0]));
-    const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-    ext_fans[sensor_index] = tokens[1] >= 8000 ? SENSOR_NOT_PRESENT : tokens[1];
+    const uint8_t sensor_index = (si > 0 && si <= max_number_of_sensors) ? si - 1 : 0;
+    ext_fans[sensor_index] = sv >= 8000 ? SENSOR_NOT_PRESENT : sv;
     return true;
   }
   
   if (cmd == CMD_EXTERNAL_SENSOR_SET_TEMP) {
+    if (si > 100) {
+      const uint8_t max_number_of_sensors = (sizeof(temps) / sizeof(temps[0]));
+      const uint8_t sensor_index = ((si - 100) > 0 && (si - 100) <= max_number_of_sensors) ? (si - 100) - 1 : 0;
+      temps[sensor_index].address[0] = TEMP_SENSOR_ADDR_OVERRIDE;
+      temps[sensor_index].current_temp = sv < 127 ? sv : 127;
+      return true;
+    }
+
     const uint8_t max_number_of_sensors = (sizeof(ext_temps) / sizeof(ext_temps[0]));
-    const uint8_t sensor_index = (tokens[0] > 0 && tokens[0] <= max_number_of_sensors) ? tokens[0] - 1 : 0;
-    ext_temps[sensor_index] = tokens[1] >= 255 ? SENSOR_NOT_PRESENT : tokens[1] < 127 ? tokens[1] : 127;
+    const uint8_t sensor_index = (si > 0 && si <= max_number_of_sensors) ? si - 1 : 0;
+    ext_temps[sensor_index] = sv >= 255 ? SENSOR_NOT_PRESENT : sv < 127 ? sv : 127;
     return true;
   }
 
@@ -1263,48 +1296,41 @@ void write_to_page (const uint8_t page_index, const uint8_t payload[], const uin
 void fan_pwm_apply_updated_values() {
   uint8_t fan_duty_cycle[] = { 0, 0 };
 
-  uint8_t external_sensor_hdd_temp_max = SENSOR_NOT_PRESENT;
+  int8_t external_sensor_hdd_temp_max = SENSOR_NOT_PRESENT;
 
   if (_disk_temperature_to_fan_speed_link_enabled) {
-    for (uint8_t disk_index = 0; disk_index <= EXT_SENSOR_INDEX_HDD_LAST - EXT_SENSOR_INDEX_HDD1; disk_index++) {
-      if (ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1] > external_sensor_hdd_temp_max) {
-        external_sensor_hdd_temp_max = ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1];
+    for (uint8_t disk_index = 0; disk_index <= EXT_SENSOR_INDEX_HDD_LAST - EXT_TEMP_SENSOR_INDEX_HDD1; disk_index++) {
+      if (ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1] > external_sensor_hdd_temp_max) {
+        external_sensor_hdd_temp_max = ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1];
       }
     }
   }
 
   for (uint8_t fan_index = 0; fan_index < sizeof(fans) / sizeof(fans[0]); fan_index++) {
     if (fans[fan_index].use_hysteresys_curve) {
-      const int8_t current_temp = fan_index == 0 && external_sensor_hdd_temp_max > 0 ? external_sensor_hdd_temp_max : temps[fan_index].current_temp;
-      if (current_temp > 0) {
-        if (current_temp <= 10) {
-          fans[fan_index].req_duty_percentage = fans[fan_index].hysteresys_curve[0];
-        } else if (current_temp >= 90) {
-          fans[fan_index].req_duty_percentage = 100;
-        } else {
-          uint8_t lower_index = (current_temp - 10) / 10;
-          uint8_t upper_index = lower_index + 1;
-          int8_t temp_low = (lower_index * 10) + 10;
+      const int8_t current_temp = fan_index == 0 && external_sensor_hdd_temp_max != SENSOR_NOT_PRESENT ? external_sensor_hdd_temp_max : temps[fan_index].current_temp;
+      if (current_temp <= 10) {
+        fans[fan_index].req_duty_percentage = fans[fan_index].hysteresys_curve[0];
+      } else if (current_temp >= 90) {
+        fans[fan_index].req_duty_percentage = 100;
+      } else {
+        const uint8_t lower_index = (current_temp - 10) / 10;
+        const uint8_t upper_index = lower_index + 1;
+        const int8_t temp_low = (lower_index * 10) + 10;
 
-          int8_t pwm_low = fans[fan_index].hysteresys_curve[lower_index];
-          int8_t pwm_high = upper_index < 8 ? fans[fan_index].hysteresys_curve[upper_index] : 100;
+        const uint8_t hysteresys_slots_count = sizeof(fans[fan_index].hysteresys_curve) / sizeof(fans[fan_index].hysteresys_curve[0]);
+        const uint8_t pwm_low = fans[fan_index].hysteresys_curve[lower_index];
+        const uint8_t pwm_high = upper_index < hysteresys_slots_count
+                                  ? fans[fan_index].hysteresys_curve[upper_index]
+                                  : 100;
 
-          if (pwm_low < 0) {
-            if (pwm_high < 0) {
-              fans[fan_index].req_duty_percentage = pwm_low;
-            }
-
-            pwm_low = 0;
-          }
-
-          fans[fan_index].req_duty_percentage = static_cast<int8_t>(pwm_low + ((pwm_high - pwm_low) * ((current_temp - temp_low) / 10.0f)));
-        }
+        fans[fan_index].req_duty_percentage = static_cast<int8_t>(pwm_low + ((pwm_high - pwm_low) * ((current_temp - temp_low) / 10.0f)));
       }
     }
 
-    const uint8_t target_pwm = fans[fan_index].req_duty_percentage < 0
-                                 ? 0
-                                 : ((fans[fan_index].max_duty_cycle - fans[fan_index].min_duty_cycle) * (fans[fan_index].req_duty_percentage / 100.0F)) + fans[fan_index].min_duty_cycle;
+    const uint8_t target_pwm = fans[fan_index].req_duty_percentage > 0
+                                 ? ((fans[fan_index].max_duty_cycle - fans[fan_index].min_duty_cycle) * (fans[fan_index].req_duty_percentage / 100.0F)) + fans[fan_index].min_duty_cycle
+                                 : 0;
 
     fan_duty_cycle[fan_index] = target_pwm;
   }
@@ -1461,23 +1487,30 @@ uint16_t calculate_fan_rpm(FanCapture &fan) {
   return static_cast<uint16_t>(rpm);
 }
 
+void temp_sensors_init() {
+  for (uint8_t temp_index = 0; temp_index < sizeof(temps) / sizeof(temps[0]); temp_index++) {
+    temps[temp_index].alert_temp = 0;
+    temps[temp_index].alert_trigger = 0;
+    temps[temp_index].alert_threshold = 4;
+    temps[temp_index].address[0] = TEMP_SENSOR_ADDR_BLANK;
+    temps[temp_index].current_temp = SENSOR_NOT_PRESENT;
+  }
+}
+
 void temp_sensors_enable() {
   tempSensors.begin();
 
   const uint8_t count = tempSensors.getDeviceCount();
 
   for (uint8_t temp_index = 0; temp_index < sizeof(temps) / sizeof(temps[0]); temp_index++) {
-    temps[temp_index].correction = 0;
-    temps[temp_index].alert_temp = 0;
-    temps[temp_index].alert_trigger = 0;
-    temps[temp_index].alert_threshold = 4;
-
-    if (temp_index < count && tempSensors.getAddress(temps[temp_index].address, temp_index)) {
-      continue;
+    if (temp_index >= count) {
+      break;
     }
 
-    temps[temp_index].address[0] = 0;
-    temps[temp_index].current_temp = SENSOR_NOT_PRESENT;
+    if (!tempSensors.getAddress(temps[temp_index].address, temp_index)) {
+      temps[temp_index].address[0] = TEMP_SENSOR_ADDR_BLANK;
+      temps[temp_index].current_temp = SENSOR_NOT_PRESENT;
+    }
   }
 
   tempSensors.setWaitForConversion(false);
@@ -1487,20 +1520,23 @@ void temp_sensors_update() {
   tempSensors.requestTemperatures();
 
   for (uint8_t temp_index = 0; temp_index < sizeof(temps) / sizeof(temps[0]); temp_index++) {
-    if (temps[temp_index].address[0] == 0) {
+    if (temps[temp_index].address[0] == TEMP_SENSOR_ADDR_BLANK) {
       temps[temp_index].current_temp = SENSOR_NOT_PRESENT;
       temps[temp_index].alert_trigger = 0;
       continue;
     }
 
-    const float temp = tempSensors.getTempC(temps[temp_index].address);
-    if (temp <= DEVICE_DISCONNECTED_C) {
-      temps[temp_index].current_temp = SENSOR_NOT_PRESENT;
-      temps[temp_index].alert_trigger++;
-      continue;
+    if (temps[temp_index].address[0] != TEMP_SENSOR_ADDR_OVERRIDE) {
+      const float temp = tempSensors.getTempC(temps[temp_index].address);
+      if (temp <= DEVICE_DISCONNECTED_C) {
+        temps[temp_index].current_temp = SENSOR_NOT_PRESENT;
+        temps[temp_index].alert_trigger++;
+        continue;
+      }
+
+      temps[temp_index].current_temp = static_cast<int8_t>(temp);
     }
 
-    temps[temp_index].current_temp = static_cast<int8_t>(temp) + temps[temp_index].correction;
     if (temps[temp_index].current_temp >= temps[temp_index].alert_temp) {
       temps[temp_index].alert_trigger++;
     } else {
@@ -1723,8 +1759,7 @@ void melody_play(const MelodyNote *melody_notes, uint8_t count) {
   }
 
   for (uint8_t i = 0; i < count; i++) {
-    _melody_notes[i].frequency = melody_notes[i].frequency;
-    _melody_notes[i].length = melody_notes[i].length;
+    _melody_notes[i] = MelodyNote { melody_notes[i].frequency, melody_notes[i].length };
 
     if (melody_notes[i].length == 0) {
       count = i;
@@ -1732,8 +1767,7 @@ void melody_play(const MelodyNote *melody_notes, uint8_t count) {
     }
   }
 
-  _melody_notes[count].frequency = 0;
-  _melody_notes[count].length = 0;
+  _melody_notes[count] = MelodyNote { 0, 0 };
 
   _melody_start_time = millis();
   _melody_note_playing_index = -1;
@@ -1862,8 +1896,8 @@ void display_page(const uint8_t index) {
   switch (index) {
     case DISPLAY_PAGE_TYPE_COOLING_HDD: display_page_sensor(F("HDD cage cooling"), fans[INT_FAN_SENSOR_INDEX_HDD].current_rpm, temps[INT_TEMP_SENSOR_INDEX_HDD].current_temp); return;
     case DISPLAY_PAGE_TYPE_COOLING_LSI: display_page_sensor(F("LSI card cooling"), fans[INT_FAN_SENSOR_INDEX_LSI].current_rpm, temps[INT_TEMP_SENSOR_INDEX_LSI].current_temp); return;
-    case DISPLAY_PAGE_TYPE_COOLING_CPU: display_page_sensor(F("CPU slot cooling"), ext_fans[EXT_FAN_SENSOR_INDEX_CPU], ext_temps[EXT_SENSOR_INDEX_CPU]); return;
-    case DISPLAY_PAGE_TYPE_COOLING_MOTHERBOARD: display_page_sensor(F("Mother/b cooling"), ext_fans[EXT_FAN_SENSOR_INDEX_MOTHERBOARD], ext_temps[EXT_SENSOR_INDEX_MOTHERBOARD]); return;
+    case DISPLAY_PAGE_TYPE_COOLING_CPU: display_page_sensor(F("CPU slot cooling"), ext_fans[EXT_FAN_SENSOR_INDEX_CPU], ext_temps[EXT_TEMP_SENSOR_INDEX_CPU]); return;
+    case DISPLAY_PAGE_TYPE_COOLING_MOTHERBOARD: display_page_sensor(F("Mother/b cooling"), ext_fans[EXT_FAN_SENSOR_INDEX_MOTHERBOARD], ext_temps[EXT_TEMP_SENSOR_INDEX_MOTHERBOARD]); return;
     case DISPLAY_PAGE_TYPE_COOLING_ALL: display_page_all_temps(); return;
     case DISPLAY_PAGE_TYPE_COOLING_ALL_DISKS: display_page_all_disk_temps(); return;
     case DISPLAY_PAGE_TYPE_LOAD_CPU: display_page_load(F("CPU load"), ext_loads[EXT_SENSOR_INDEX_CPU]); return;
@@ -1921,10 +1955,10 @@ void display_page_all_temps() {
 
   const uint8_t number_of_digits = _use_fahrenheit_temp ? 3 : 2;
 
-  write_temperature(&line1[_use_fahrenheit_temp ? 6 : 5], ext_temps[EXT_SENSOR_INDEX_CPU], number_of_digits);
-  write_temperature(&line2[_use_fahrenheit_temp ? 6 : 5], ext_temps[EXT_SENSOR_INDEX_MOTHERBOARD], number_of_digits);
-  write_temperature(&line1[14], temps[0].current_temp, number_of_digits);
-  write_temperature(&line2[14], temps[1].current_temp, number_of_digits);
+  write_temperature(&line1[_use_fahrenheit_temp ? 6 : 5], ext_temps[EXT_TEMP_SENSOR_INDEX_CPU], number_of_digits);
+  write_temperature(&line2[_use_fahrenheit_temp ? 6 : 5], ext_temps[EXT_TEMP_SENSOR_INDEX_MOTHERBOARD], number_of_digits);
+  write_temperature(&line1[14], temps[INT_TEMP_SENSOR_INDEX_HDD].current_temp, number_of_digits);
+  write_temperature(&line2[14], temps[INT_TEMP_SENSOR_INDEX_LSI].current_temp, number_of_digits);
 
   lcd_send_line(0, line1);
   lcd_send_line(1, line2);
@@ -1951,13 +1985,13 @@ void display_page_all_disk_temps() {
     const uint8_t char_offset = (disk_index * 4);
     line2[char_offset + 3] = _use_fahrenheit_temp ? '\x07' : '\x06';
 
-    if (ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1] == SENSOR_NOT_PRESENT) {
+    if (ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1] == SENSOR_NOT_PRESENT) {
       line2[char_offset + 1] = '-';
       line2[char_offset + 2] = '-';
       continue;
     }
 
-    write_temperature(&line2[char_offset + 2], ext_temps[disk_index + EXT_SENSOR_INDEX_HDD1], number_of_digits);
+    write_temperature(&line2[char_offset + 2], ext_temps[disk_index + EXT_TEMP_SENSOR_INDEX_HDD1], number_of_digits);
   }
 
   lcd_send_line(0, F("HDD1  #2  #3  #4"));
@@ -2673,6 +2707,14 @@ void rgb_led_restore_color() {
   rgb_led_set_colors(_rgb_led_colors_user_set, sizeof(_rgb_led_colors_user_set) / sizeof(_rgb_led_colors_user_set[0]), _rgb_led_colors_user_mode == RGB_LED_USER_MODE_BREATHING_COLOR);
 }
 
+bool rgb_cmp3(const RgbColor *c1, const RgbColor *c2) {
+  return c1->r == c2->r && c1->g == c2->g && c1->b == c2->b;
+}
+
+bool rgb_cmp4(const RgbColor *c1, const RgbColor *c2) {
+  return c1->r == c2->r && c1->g == c2->g && c1->b == c2->b && c1->length == c2->length;
+}
+
 uint32_t compute_rgb_config_hash(const RgbColor *colors, const size_t num_colors, const bool breathing_mode) {
     uint32_t hash = 5381;
     hash = ((hash << 5) + hash) + (breathing_mode ? 1 : 0);
@@ -2705,18 +2747,13 @@ void rgb_led_set_colors(const RgbColor *colors, const uint8_t count, const bool 
     _current_color_hash = 0;
   }
 
-  for (uint8_t i = 0; i < count; i++) {
-    _rgb_led_colors[i].r = colors[i].r;
-    _rgb_led_colors[i].g = colors[i].g;
-    _rgb_led_colors[i].b = colors[i].b;
-    _rgb_led_colors[i].length = colors[i].length;
-  }
-
-  for (uint8_t i = count; i < sizeof(_rgb_led_colors) / sizeof(_rgb_led_colors[0]); i++) {
-    _rgb_led_colors[i].r = 0;
-    _rgb_led_colors[i].g = 0;
-    _rgb_led_colors[i].b = 0;
-    _rgb_led_colors[i].length = 0;
+  for (uint8_t i = 0; i < sizeof(_rgb_led_colors) / sizeof(_rgb_led_colors[0]); i++) {
+    if (i < count) {
+      _rgb_led_colors[i] = RgbColor { colors[i].r, colors[i].g, colors[i].b, colors[i].length };
+      continue;
+    }
+    
+    _rgb_led_colors[i] = RgbColor { 0, 0, 0, 0 };
   }
 
   _rgb_led_toggle_counter = 0;
@@ -2739,12 +2776,8 @@ void rgb_led_set_colors(const RgbColor *colors, const uint8_t count, const bool 
   if (_rgb_led_colors[0].g != 0 && g < 1) { g = 1; }
   if (_rgb_led_colors[0].b != 0 && b < 1) { b = 1; }
   
-  _rgb_led_colors[1].r = (uint8_t)roundf(r);
-  _rgb_led_colors[1].g = (uint8_t)roundf(g);
-  _rgb_led_colors[1].b = (uint8_t)roundf(b);
-  _rgb_led_colors[2].r = 0;
-  _rgb_led_colors[2].g = 0;
-  _rgb_led_colors[2].b = 0;
+  _rgb_led_colors[1] = RgbColor { (uint8_t)roundf(r), (uint8_t)roundf(g), (uint8_t)roundf(b), _rgb_led_colors[1].length };
+  _rgb_led_colors[2] = RgbColor { 0, 0, 0, _rgb_led_colors[2].length };
   _rgb_led_breath_direction = +1;
   _rgb_led_next_toggle_time = 1;
 }
@@ -2789,10 +2822,7 @@ void rgb_led_update(const unsigned long elapsed_time) {
       }
     }
 
-    _rgb_led_colors[2].r = r;
-    _rgb_led_colors[2].g = g;
-    _rgb_led_colors[2].b = b;
-
+    _rgb_led_colors[2] = RgbColor { (uint8_t)r, (uint8_t)g, (uint8_t)b, _rgb_led_colors[2].length };
     _rgb_led_next_toggle_time += RGB_LED_BREATH_INCREMENT_IN_MILLISECONDS;
     rgb_led_update_all();
 
@@ -2863,13 +2893,34 @@ void rgb_led_update_all(const RgbColor color) {
   array_led_color = rgb_dimming(array_led_color, _rgb_led_status_dimming_level);
   network_led_color = rgb_dimming(network_led_color, _rgb_led_status_dimming_level);
 
-  uint8_t led_data[] = {
-    main_led_color.r, main_led_color.g, main_led_color.b,  // LED #1 and #2 (same color for first 2 LEDs)
-    main_led_color.r, main_led_color.g, main_led_color.b,  // LED #1 and #2 (same color for first 2 LEDs)
-    array_led_color.r, array_led_color.g, array_led_color.b,
-    network_led_color.r, network_led_color.g, network_led_color.b };
+  const bool led_1_changed = !rgb_cmp3(&main_led_color, &_opti_led_1);
+  const bool led_3_changed = !rgb_cmp3(&array_led_color, &_opti_led_3);
+  const bool led_4_changed = !rgb_cmp3(&network_led_color, &_opti_led_4);
 
-  rgb_led_send_data(led_data, sizeof(led_data) / 3);
+  if (led_1_changed && (!led_3_changed || !led_4_changed)) {
+    _opti_led_1 = RgbColor { main_led_color.r, main_led_color.g, main_led_color.b, 0 };
+
+    uint8_t led_data[] = {
+      main_led_color.r, main_led_color.g, main_led_color.b,  // LED #1 and #2 (same color for first 2 LEDs)
+      main_led_color.r, main_led_color.g, main_led_color.b}; // LED #1 and #2 (same color for first 2 LEDs)
+
+    rgb_led_send_data(led_data, sizeof(led_data) / 3);
+    return;
+  }
+
+  if (led_3_changed || led_4_changed) {
+    _opti_led_1 = RgbColor { main_led_color.r, main_led_color.g, main_led_color.b, 0 };
+    _opti_led_3 = RgbColor { array_led_color.r, array_led_color.g, array_led_color.b, 0 };
+    _opti_led_4 = RgbColor { network_led_color.r, network_led_color.g, network_led_color.b, 0 };
+
+    uint8_t led_data[] = {
+      main_led_color.r, main_led_color.g, main_led_color.b,  // LED #1 and #2 (same color for first 2 LEDs)
+      main_led_color.r, main_led_color.g, main_led_color.b,  // LED #1 and #2 (same color for first 2 LEDs)
+      array_led_color.r, array_led_color.g, array_led_color.b,
+      network_led_color.r, network_led_color.g, network_led_color.b };
+
+    rgb_led_send_data(led_data, sizeof(led_data) / 3);
+  }
 }
 
 void rgb_led_send_data(const uint8_t *rgb_data, const uint8_t num_leds) {
@@ -2877,10 +2928,12 @@ void rgb_led_send_data(const uint8_t *rgb_data, const uint8_t num_leds) {
 
   for (uint8_t led_index = 0; led_index < num_leds; led_index++) {
     const uint8_t *led_data = &rgb_data[led_index * 3];
+    const uint8_t grb[3] = {led_data[1], led_data[0], led_data[2]};
     for (uint8_t color_index = 0; color_index < 3; color_index++) {
-      const uint8_t byte = color_index == 0 ? led_data[1] : color_index == 1 ? led_data[0] : led_data[2];
+      const uint8_t byte = grb[color_index];
+      uint8_t mask = 0x80;
       for (uint8_t i = 0; i < 8; i++) {
-        if ((byte << i) & 0x80) {
+        if (byte & mask) {
           RGB_LED_PORT |= (1 << RGB_LED_BIT);
           __asm__ __volatile__ ("nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t");
           RGB_LED_PORT &= ~(1 << RGB_LED_BIT);
@@ -2891,10 +2944,13 @@ void rgb_led_send_data(const uint8_t *rgb_data, const uint8_t num_leds) {
           RGB_LED_PORT &= ~(1 << RGB_LED_BIT);
           __asm__ __volatile__ ("nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t nop\n\t");
         }
+
+        mask >>= 1;
       }
     }
   }
 
+  _delay_us(80);
   interrupts();
 }
 
@@ -2923,21 +2979,21 @@ void init_fan_capture(FanCapture &fan) {
   fan.rpm_counter = 0;
   memset(fan.capture_buffer, 0, sizeof(fan.capture_buffer));
   fan.capture_buffer_index = 0;
-  fan.min_duty_cycle = (20.0F / 100.0F) * 255.0F;  // min fan speed is 40% (* 255 as we use full byte value)
-  fan.max_duty_cycle = 255;                        // max fan speed is 100% (= 255 as we use full byte value)
+  fan.min_duty_cycle = (20 / 100.0F) * 255.0F;     // min fan speed is 20% (* 255 as we use full byte value)
+  fan.max_duty_cycle = (100 / 100.0F) * 255.0F;    // max fan speed is 100% (= 255 as we use full byte value)
   fan.req_duty_percentage = 100;                   // default fan speed is 100% of `max_duty_cycle` (= 100 as we use 0..100 values only)
   fan.alert_rpm = 0;
   fan.alert_threshold = 4;  // alert after 4 consecutive check failures (it's = 1 second as we check every 250ms)
   fan.alert_trigger = 0;
   fan.current_rpm = SENSOR_NOT_PRESENT;
   fan.use_hysteresys_curve = true;
-  fan.hysteresys_curve[0] = -1;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 10C
+  fan.hysteresys_curve[0] = 0;    // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 10C
   fan.hysteresys_curve[1] = 0;    // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 20C
-  fan.hysteresys_curve[2] = 10;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 30C
-  fan.hysteresys_curve[3] = 20;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 40C
-  fan.hysteresys_curve[4] = 40;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 50C
-  fan.hysteresys_curve[5] = 60;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 60C
-  fan.hysteresys_curve[6] = 80;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 70C
+  fan.hysteresys_curve[2] = 20;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 30C
+  fan.hysteresys_curve[3] = 40;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 40C
+  fan.hysteresys_curve[4] = 60;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 50C
+  fan.hysteresys_curve[5] = 80;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 60C
+  fan.hysteresys_curve[6] = 90;   // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 70C
   fan.hysteresys_curve[7] = 100;  // fan speed in % of PWM between `min_duty_cycle` and `max_duty_cycle` at 80C
 }
 
